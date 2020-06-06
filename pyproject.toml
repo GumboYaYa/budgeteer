@@ -8,6 +8,7 @@ authors = ["GumboYaYa <throbberwocky@gmail.com>"]
 python = "^3.8"
 black = "^19.10b0"
 pylint = "^2.5.2"
+configobj = "^5.0.6"
 
 [tool.poetry.dev-dependencies]
 django = "^3.0.6"

@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/3.0/ref/settings/
 """
 
 import os
+from configobj import ConfigObj
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -73,10 +74,24 @@ WSGI_APPLICATION = 'mysite.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/3.0/ref/settings/#databases
 
+DB_CONF_FILE = f"{BASE_DIR}/mysite/db.conf"
+DB_CONFIG = ConfigObj(DB_CONF_FILE)
+
+DB_HOST = DB_CONFIG['DB_HOST']
+DB_NAME = DB_CONFIG['DB_NAME']
+DB_USER = DB_CONFIG['DB_USER']
+DB_PASSWORD = DB_CONFIG['DB_PASSWORD']
+DB_PORT = DB_CONFIG['DB_PORT']
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        'ENGINE': 'django.db.backends.postgresql',
+        'OPTIONS': {'options': '-c search_path=bt'},
+        'HOST': DB_HOST,
+        'NAME': DB_NAME,
+        'USER': DB_USER,
+        'PASSWORD': DB_PASSWORD,
+        'PORT': DB_PORT,
     }
 }
 
