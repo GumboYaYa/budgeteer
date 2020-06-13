@@ -2,6 +2,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
 
 from .forms import FileUploadForm
+from .utils import cnvt_date
 
 # TODO: Strip fields if necessary
 # TODO: Convert figure to decimal , > .
@@ -19,9 +20,8 @@ def upload_file(request):
 			fields = line.split(";")
 			data_dict = {}
 			data_dict["iban"] = fields[0]
-			data_dict["date_booking"] = fields[1]
+			data_dict["date_booking"] = cnvt_date(fields[1])
 			data_dict["reference"] = fields[4]
-			data_dict["optionee_id"] = fields[5]
 			data_dict["optionee_name"] = fields[11]
 			data_dict["optionee_iban"] = fields[12]
 			data_dict["optionee_bic"] = fields[13]
