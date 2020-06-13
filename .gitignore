@@ -130,3 +130,7 @@ dmypy.json
 
 # Configuration Files
 src/mysite/db.conf
+
+# Import data
+*.CSV
+*.csv
