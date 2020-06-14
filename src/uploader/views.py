@@ -2,11 +2,7 @@ from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
 
 from .forms import FileUploadForm
-from .utils import cnvt_date, cnvt_float, rm_spaces
-
-# TODO: Strip fields if necessary
-# TODO: Convert figure to decimal , > .
-# TODO: Convert date
+from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes
 
 
 def upload_file(request):
@@ -14,11 +10,16 @@ def upload_file(request):
         form = FileUploadForm(request.POST, request.FILES)
         csv_file = request.FILES["csv_file"]
 
-        file_data = csv_file.read().decode("utf-8")
+        def cleanutf(str):
+            return ''.join([c if len(c.encode('utf-8')) < 3 else '?' for c in str])
+
+        file_data = csv_file.read().decode("utf-8", errors='replace')
         lines = file_data.splitlines()
 
-        for line in lines:
+        for line in lines[1:]:
+            # clean_line = cleanutf(line)
             fields = line.split(";")
+            fields = [x.strip("\"") for x in fields]
             data_dict = {}
             data_dict["iban"] = fields[0]
             data_dict["date_booking"] = cnvt_date(fields[1])
@@ -31,12 +32,17 @@ def upload_file(request):
 
             form = FileUploadForm(data_dict)
 
+            # TODO: Figure out why the form is not valid
             if form.is_valid():
                 form.save()
                 return HttpResponseRedirect("/success/url/")
     else:
         form = FileUploadForm()
     return render(request, "upload/index.html", {"form": form})
+
+
+def success(request):
+    return HttpResponse('This is the success page.')
 
     # return HttpResponse('This is the import page.')
 

@@ -27,6 +27,9 @@ def cnvt_float(s):
 def rm_spaces(s):
     return " ".join(s.split())
 
+def rm_quotes(s):
+    return s.strip("\"")
+
 
 # def booking_status(str):
 #     if re.search(str, str)
