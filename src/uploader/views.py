@@ -8,7 +8,7 @@ from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes
 def upload_file(request):
     if request.method == "POST":
         form = FileUploadForm(request.POST, request.FILES)
-        csv_file = request.FILES["csv_file"]
+        csv_file = request.FILES["file"]
 
         def cleanutf(str):
             return ''.join([c if len(c.encode('utf-8')) < 3 else '?' for c in str])
@@ -22,6 +22,7 @@ def upload_file(request):
             fields = [x.strip("\"") for x in fields]
             data_dict = {}
             data_dict["iban"] = fields[0]
+            print(fields[0])
             data_dict["date_booking"] = cnvt_date(fields[1])
             data_dict["reference"] = fields[4]
             data_dict["optionee_name"] = rm_spaces(fields[11])
@@ -30,59 +31,23 @@ def upload_file(request):
             data_dict["figure"] = cnvt_float(fields[14])
             data_dict["currency"] = fields[15]
 
+            print(data_dict)
+
             form = FileUploadForm(data_dict)
+            print(form)
+
+            # form.save()
+            # return HttpResponseRedirect("/success/url/")
 
             # TODO: Figure out why the form is not valid
             if form.is_valid():
                 form.save()
-                return HttpResponseRedirect("/success/url/")
+                return HttpResponseRedirect("success/")
     else:
         form = FileUploadForm()
-    return render(request, "upload/index.html", {"form": form})
+        print("Form is not POST method!")
+    return render(request, "uploader/index.html", {"form": form})
 
 
 def success(request):
     return HttpResponse('This is the success page.')
-
-    # return HttpResponse('This is the import page.')
-
-    # data = {}
-    # if "GET" == request.method:
-    # 	return render(request, "myapp/upload_csv.html", data)
-    # # if not GET, then proceed
-    # try:
-    # 	csv_file = request.FILES["csv_file"]
-    # 	if not csv_file.name.endswith('.csv'):
-    # 		messages.error(request,'File is not CSV type')
-    # 		return HttpResponseRedirect(reverse("myapp:upload_csv"))
-    #     #if file is too large, return
-    # 	if csv_file.multiple_chunks():
-    # 		messages.error(request,"Uploaded file is too big (%.2f MB)." % (csv_file.size/(1000*1000),))
-    # 		return HttpResponseRedirect(reverse("myapp:upload_csv"))
-
-    # 	file_data = csv_file.read().decode("utf-8")
-
-    # 	lines = file_data.split("\n")
-    # 	#loop over the lines and save them in db. If error , store as string and then display
-    # 	for line in lines:
-    # 		fields = line.split(",")
-    # 		data_dict = {}
-    # 		data_dict["name"] = fields[0]
-    # 		data_dict["start_date_time"] = fields[1]
-    # 		data_dict["end_date_time"] = fields[2]
-    # 		data_dict["notes"] = fields[3]
-    # 		try:
-    # 			form = EventsForm(data_dict)
-    # 			if form.is_valid():
-    # 				form.save()
-    # 			else:
-    # 				logging.getLogger("error_logger").error(form.errors.as_json())
-    # 		except Exception as e:
-    # 			logging.getLogger("error_logger").error(repr(e))
-    # 			pass
-
-    # except Exception as e:
-    # 	logging.getLogger("error_logger").error("Unable to upload file. "+repr(e))
-    # 	messages.error(request,"Unable to upload file. "+repr(e))
-
-    # return HttpResponseRedirect(reverse("myapp:upload_csv"))

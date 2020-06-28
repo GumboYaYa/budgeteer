@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/3.0/ref/settings/
 """
 
 import os
-from configobj import ConfigObj
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +20,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # See https://docs.djangoproject.com/en/3.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = '722xrrej4=#qb0s1m6$7h9$56=)+7s8_n3=dx2dsr=6-7_#+nd'
+SECRET_KEY = os.environ['SECRET_KEY']
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -75,24 +74,15 @@ WSGI_APPLICATION = 'mysite.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/3.0/ref/settings/#databases
 
-DB_CONF_FILE = f"{BASE_DIR}/mysite/db.conf"
-DB_CONFIG = ConfigObj(DB_CONF_FILE)
-
-DB_HOST = DB_CONFIG['DB_HOST']
-DB_NAME = DB_CONFIG['DB_NAME']
-DB_USER = DB_CONFIG['DB_USER']
-DB_PASSWORD = DB_CONFIG['DB_PASSWORD']
-DB_PORT = DB_CONFIG['DB_PORT']
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'OPTIONS': {'options': '-c search_path=bt'},
-        'HOST': DB_HOST,
-        'NAME': DB_NAME,
-        'USER': DB_USER,
-        'PASSWORD': DB_PASSWORD,
-        'PORT': DB_PORT,
+        'HOST': os.environ["DB_HOST"],
+        'NAME': os.environ["DB_NAME"],
+        'USER': os.environ["DB_USER"],
+        'PASSWORD': os.environ["DB_PWRD"],
+        'PORT': os.environ["DB_PORT"],
     }
 }
 
@@ -121,7 +111,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Europe/Berlin'
 
 USE_I18N = True
 
