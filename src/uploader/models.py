@@ -5,6 +5,10 @@ class Account(models.Model):
     iban = models.CharField(max_length=22, unique=True)
 
 
+class Bic(models.Model):
+    bic = models.CharField(max_length=11, unique=True)
+
+
 class Currency(models.Model):
     currency_short = models.CharField(max_length=3, unique=True)
     currency_long = models.CharField(max_length=100)
@@ -12,8 +16,8 @@ class Currency(models.Model):
 
 class Optionee(models.Model):
     name = models.CharField(max_length=200)
-    iban = models.CharField(max_length=22, unique=True)
-    bic = models.CharField(max_length=11)
+    iban = models.ForeignKey(Account, on_delete=models.CASCADE)
+    bic = models.ForeignKey(Bic, on_delete=models.CASCADE)
 
 
 class Transaction(models.Model):

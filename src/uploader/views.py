@@ -25,7 +25,6 @@ def upload_file(request):
             fields = [x.strip("\"") for x in fields]
             data_dict = {}
             data_dict["iban"] = fields[0]
-            print(fields[0])
             data_dict["date_booking"] = cnvt_date(fields[1])
             data_dict["reference"] = fields[4]
             data_dict["optionee_name"] = rm_spaces(fields[11])
@@ -34,10 +33,9 @@ def upload_file(request):
             data_dict["figure"] = cnvt_float(fields[14])
             data_dict["currency"] = fields[15]
 
-            print(data_dict)
+            # print(data_dict)
 
             form = FileUploadForm(data_dict)
-            print(form)
 
             if form.is_valid():
                 form.save()
