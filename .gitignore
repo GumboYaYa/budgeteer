@@ -131,8 +131,14 @@ dmypy.json
 # Configuration Files
 src/mysite/db.conf
 
+<<<<<<< HEAD
 # VS Code
 .vscode/*
 
 # CSV
 csv/*
+=======
+# Import data
+*.CSV
+*.csv
+>>>>>>> 927879e56da707a58f587a13c5675e3f4e5fc51c

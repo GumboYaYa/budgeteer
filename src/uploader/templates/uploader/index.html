@@ -1,0 +1,13 @@
+<form action="{% url 'upload_file' %}" method="POST" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <div>
+        {{ form.file.errors }}
+        {{ form.file.label_tag }}
+        {{ form.file }}
+        <!-- <input type="file" name="csv_file" required="True"> -->
+    </div>
+    <div>
+        <input type="submit" value="Upload">
+    </div>
+</form>
