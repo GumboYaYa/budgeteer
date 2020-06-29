@@ -1,5 +1,5 @@
 from django import forms
-from .models import Account, Bic, Currency, Optionee, Transaction
+from .models import Iban, Bic, Currency, Optionee, Transaction
 
 
 class FileUploadForm(forms.Form):
@@ -18,15 +18,15 @@ class FileUploadForm(forms.Form):
         data = self.cleaned_data
         # data = self
 
-        acc, created = Account.objects.get_or_create(iban=data["iban"])
+        iban, created = Iban.objects.get_or_create(iban=data["iban"])
         if created:
-            acc.save()
+            iban.save()
 
-        o_iban, created = Account.objects.get_or_create(iban=data["optionee_iban"])
+        o_iban, created = Iban.objects.get_or_create(iban=data["optionee_iban"])
         if created:
             o_iban.save()
 
-        bic, created = Bic.objects.get_or_create(iban=data["optionee_bic"])
+        bic, created = Bic.objects.get_or_create(bic=data["optionee_bic"])
         if created:
             bic.save()
 
@@ -39,7 +39,7 @@ class FileUploadForm(forms.Form):
             curr.save()
 
         transaction, created = Transaction.objects.get_or_create(
-            account=acc,
+            account=iban,
             date_booking=data["date_booking"],
             optionee=opt,
             figure=data["figure"],
