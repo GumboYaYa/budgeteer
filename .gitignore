@@ -130,3 +130,9 @@ dmypy.json
 
 # Configuration Files
 src/mysite/db.conf
+
+# VS Code
+.vscode/*
+
+# CSV
+csv/*
