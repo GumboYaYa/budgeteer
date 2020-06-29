@@ -4,6 +4,9 @@ from django.shortcuts import render
 from .forms import FileUploadForm
 from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes
 
+# TODO: Implement with ModelForm
+# TODO: Parse unique transaction id (for duplication detection)
+# TODO: Add dropdown for each bank (different mapping)
 
 def upload_file(request):
     if request.method == "POST":
@@ -36,13 +39,10 @@ def upload_file(request):
             form = FileUploadForm(data_dict)
             print(form)
 
-            # form.save()
-            # return HttpResponseRedirect("/success/url/")
-
-            # TODO: Figure out why the form is not valid
             if form.is_valid():
                 form.save()
-                return HttpResponseRedirect("success/")
+
+        return HttpResponseRedirect("success/")
     else:
         form = FileUploadForm()
         print("Form is not POST method!")

@@ -30,7 +30,7 @@ class FileUploadForm(forms.Form):
         if created:
             curr.save()
 
-        transaction = Transaction.objects.create(
+        transaction, created = Transaction.objects.get_or_create(
             account=acc,
             date_booking=data["date_booking"],
             optionee=opt,
@@ -38,4 +38,5 @@ class FileUploadForm(forms.Form):
             currency=curr,
             reference=data["reference"],
         )
-        transaction.save()
+        if created:
+            transaction.save()
