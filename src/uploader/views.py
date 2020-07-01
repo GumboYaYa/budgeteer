@@ -4,9 +4,9 @@ from django.shortcuts import render
 from .forms import FileUploadForm
 from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes
 
-# TODO: Implement with ModelForm
-# TODO: Parse unique transaction id (for duplication detection)
-# TODO: Add dropdown for each bank (different mapping)
+# TODO: Implement with ModelForm - is it useful in this case?
+# TODO: How to identify each transaction unambiguously?
+# TODO: Add dropdown for each bank (different column mapping)
 
 def upload_file(request):
     if request.method == "POST":
