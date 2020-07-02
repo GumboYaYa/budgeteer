@@ -1,3 +1,6 @@
+{% extends "./base.html" %}
+
+{% block content %}
 <form action="{% url 'upload_file' %}" method="POST" enctype="multipart/form-data">
     {% csrf_token %}
     {{ form.non_field_errors }}
@@ -11,3 +14,4 @@
         <input type="submit" value="Upload">
     </div>
 </form>
+{% endblock %}

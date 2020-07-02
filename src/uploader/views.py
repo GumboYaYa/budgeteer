@@ -1,8 +1,10 @@
 from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
+from django.views.generic import ListView
 
 from .forms import FileUploadForm
 from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes
+from .models import Transaction
 
 # TODO: Implement with ModelForm - is it useful in this case?
 # TODO: How to identify each transaction unambiguously?
@@ -47,5 +49,9 @@ def upload_file(request):
     return render(request, "uploader/index.html", {"form": form})
 
 
-def success(request):
-    return HttpResponse('This is the success page.')
+class ImportedData(ListView):
+    model = Transaction
+    template_name = "uploader/success.html"
+    context_object_name = "imported_data"
+
+    # return HttpResponse('This is the success page.')
