@@ -3,6 +3,12 @@ import datetime
 from decimal import *
 
 
+# TODO: Create classes for each bank
+
+class Haspa():
+    pass
+
+
 def cnvt_date(s):
     date_split = s.split(".")
 

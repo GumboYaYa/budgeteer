@@ -21,19 +21,21 @@ def upload_file(request):
         file_data = csv_file.read().decode("utf-8", errors='replace')
         lines = file_data.splitlines()
 
-        for line in lines[1:]:
-            # clean_line = cleanutf(line)
+        haspa_mapping = {"start_line": 1, "iban": 0, "date_booking": 1, "reference": 4, "optionee_name": 11, "optionee_iban": 12, "optionee_bic":13, "figure": 14, "currency": 15}
+
+        for line in lines[haspa_mapping["start_line"]:]:
+            clean_line = cleanutf(line)
             fields = line.split(";")
             fields = [x.strip("\"") for x in fields]
             data_dict = {}
-            data_dict["iban"] = fields[0]
-            data_dict["date_booking"] = cnvt_date(fields[1])
-            data_dict["reference"] = fields[4]
-            data_dict["optionee_name"] = rm_spaces(fields[11])
-            data_dict["optionee_iban"] = fields[12]
-            data_dict["optionee_bic"] = fields[13]
-            data_dict["figure"] = cnvt_float(fields[14])
-            data_dict["currency"] = fields[15]
+            data_dict["iban"] = fields[haspa_mapping["iban"]]
+            data_dict["date_booking"] = cnvt_date(fields[haspa_mapping["date_booking"]])
+            data_dict["reference"] = fields[haspa_mapping["reference"]]
+            data_dict["optionee_name"] = rm_spaces(fields[haspa_mapping["optionee_name"]])
+            data_dict["optionee_iban"] = fields[haspa_mapping["optionee_iban"]]
+            data_dict["optionee_bic"] = fields[haspa_mapping["optionee_bic"]]
+            data_dict["figure"] = cnvt_float(fields[haspa_mapping["figure"]])
+            data_dict["currency"] = fields[haspa_mapping["currency"]]
 
             # print(data_dict)
 
