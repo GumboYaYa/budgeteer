@@ -5,10 +5,14 @@
     {% csrf_token %}
     {{ form.non_field_errors }}
     <div>
+        {{ form.bank.errors }}
+        {{ form.bank.label_tag }}
+        {{ form.bank }}
+    </div>
+    <div>
         {{ form.file.errors }}
         {{ form.file.label_tag }}
         {{ form.file }}
-        <!-- <input type="file" name="csv_file" required="True"> -->
     </div>
     <div>
         <input type="submit" value="Upload">

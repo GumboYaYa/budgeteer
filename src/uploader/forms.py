@@ -3,7 +3,12 @@ from .models import Iban, Bic, Currency, Optionee, Transaction
 
 
 class FileUploadForm(forms.Form):
+    choices_bank = [
+        ("HAS", "Hamburger Sparkasse"),
+        ("DKB", "Deutsche Kredit Bank"),
+    ]
 
+    bank = forms.ChoiceField(choices=choices_bank)
     file = forms.FileField(required=False)
     iban = forms.CharField(max_length=24, strip=True)
     currency = forms.CharField(max_length=3, strip=True)
@@ -16,7 +21,6 @@ class FileUploadForm(forms.Form):
 
     def save(self):
         data = self.cleaned_data
-        # data = self
 
         iban, created = Iban.objects.get_or_create(iban=data["iban"])
         if created:
