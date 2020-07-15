@@ -1,5 +1,5 @@
 from django import forms
-from .models import Iban, Bic, Currency, Optionee, Transaction
+from .models import Iban, Bic, BookingType, Currency, Optionee, Transaction
 
 
 class FileUploadForm(forms.Form):
@@ -12,6 +12,7 @@ class FileUploadForm(forms.Form):
     file = forms.FileField(required=False)
     iban = forms.CharField(max_length=24, strip=True)
     currency = forms.CharField(max_length=3, strip=True)
+    booking_type = forms.CharField(max_length=50, strip=True)
     optionee_name = forms.CharField(max_length=200, strip=True)
     optionee_iban = forms.CharField(max_length=22, strip=True)
     optionee_bic = forms.CharField(max_length=11, strip=True)
@@ -34,17 +35,22 @@ class FileUploadForm(forms.Form):
         if created:
             bic.save()
 
+        b_type, created = BookingType.objects.get_or_create(name=data["booking_type"])
+        if created:
+            b_type.save()
+
         curr, created = Currency.objects.get_or_create(currency_short=data["currency"])
         if created:
             curr.save()
 
         opt, created = Optionee.objects.get_or_create(name=data["optionee_name"], iban=o_iban, bic=bic)
         if created:
-            curr.save()
+            opt.save()
 
         transaction, created = Transaction.objects.get_or_create(
             account=iban,
             date_booking=data["date_booking"],
+            booking_type=b_type,
             optionee=opt,
             figure=data["figure"],
             currency=curr,

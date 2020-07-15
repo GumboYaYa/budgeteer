@@ -3,10 +3,10 @@ import datetime
 from decimal import *
 
 
-# TODO: Create classes for each bank
-
-class Haspa():
-    pass
+def cnvt_csv(file):
+        data = file.replace("\"", "")
+        lines = data.splitlines()
+        return [x.split(";") for x in lines]
 
 
 def cnvt_date(s):
@@ -33,10 +33,27 @@ def cnvt_float(s):
 def rm_spaces(s):
     return " ".join(s.split())
 
+
 def rm_quotes(s):
     return s.strip("\"")
 
 
-# def booking_status(str):
-#     if re.search(str, str)
-#     return str
+def cnvt_booking_type(s):
+    if re.search("kartenzahl", s, flags=re.IGNORECASE):
+        return "Kartenzahlung"
+    elif re.search("lastsch", s, flags=re.IGNORECASE):
+        return "Lastschrift"
+    elif re.search("dauerauf", s, flags=re.IGNORECASE):
+        return "Dauerauftrag"
+    elif re.search("gutsch", s, flags=re.IGNORECASE):
+        return "Gutschrift"
+    elif re.search("kreditk", s, flags=re.IGNORECASE):
+        return "Kreditkarte"
+    elif re.search("lohn|gehalt|rente", s, flags=re.IGNORECASE):
+        return "Lohn"
+    elif re.search("barge", s, flags=re.IGNORECASE):
+        return "Bargeldauszahlung"
+    elif re.search("abschl", s, flags=re.IGNORECASE):
+        return "Abschluss"
+    else:
+        return s

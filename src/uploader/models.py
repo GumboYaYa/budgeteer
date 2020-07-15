@@ -15,6 +15,13 @@ class Bic(models.Model):
         return self.bic
 
 
+class BookingType(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
 class Currency(models.Model):
     currency_short = models.CharField(max_length=3, unique=True)
     currency_long = models.CharField(max_length=100)
@@ -36,10 +43,10 @@ class Transaction(models.Model):
     account = models.ForeignKey(Iban, on_delete=models.CASCADE)
     date_booking = models.DateField()
     date_imported = models.DateField(auto_now_add=True)
+    booking_type = models.ForeignKey(BookingType, on_delete=models.CASCADE)
     optionee = models.ForeignKey(Optionee, on_delete=models.CASCADE)
     figure = models.DecimalField(max_digits=18, decimal_places=2)
     currency = models.ForeignKey(Currency, on_delete=models.CASCADE)
-    # reference = models.CharField(max_length=378)
     reference = models.CharField(max_length=500)
 
     def __str__(self):
