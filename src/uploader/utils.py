@@ -26,7 +26,7 @@ def cnvt_date(s):
 
 
 def cnvt_float(s):
-    d = s.replace(",", ".")
+    d = s.replace(".", "").replace(",", ".")
     return float(d)
 
 

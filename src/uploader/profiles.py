@@ -1,4 +1,3 @@
-from django.http import HttpResponseRedirect
 from .forms import FileUploadForm
 from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes, cnvt_booking_type
 
@@ -15,13 +14,17 @@ def do_has(data):
         data_dict["optionee_bic"] = line[13]
         data_dict["figure"] = cnvt_float(line[14])
         data_dict["currency"] = line[15]
-
-        print(data_dict)
+        # print(data_dict)
 
         form = FileUploadForm(data_dict)
 
         if form.is_valid():
+            print("Form is valid.")
             form.save()
+            print("Form saved.")
+        else:
+            print("Form is not valid.")
+        print(form.errors)
 
 
 def do_dkb(data):
@@ -37,20 +40,17 @@ def do_dkb(data):
         data_dict["optionee_bic"] = line[6]
         data_dict["figure"] = cnvt_float(line[7])
         data_dict["currency"] = "EUR"
-
-        print(data_dict)
+        # print(data_dict)
 
         form = FileUploadForm(data_dict)
-
-        # print(form)
 
         if form.is_valid():
             print("Form is valid.")
             form.save()
             print("Form saved.")
-            return HttpResponseRedirect("success/")
         else:
             print("Form is not valid.")
+        print(form.errors)
 
 
 bank_templates = {
@@ -59,4 +59,4 @@ bank_templates = {
 }
 
 def run_template(id, data):
-    bank_templates[id](data)
+    return bank_templates[id](data)

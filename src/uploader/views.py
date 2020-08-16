@@ -23,6 +23,8 @@ def upload_file(request):
 
         bank_id = request.POST["bank"]
         run_template(bank_id, fields)
+
+        return HttpResponseRedirect("success/")
     else:
         form = FileUploadForm()
         print("Form is not POST method!")

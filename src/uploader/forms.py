@@ -8,7 +8,7 @@ class FileUploadForm(forms.Form):
         ("DKB", "Deutsche Kredit Bank"),
     ]
 
-    bank = forms.ChoiceField(choices=choices_bank)
+    bank = forms.ChoiceField(choices=choices_bank, required=False)
     file = forms.FileField(required=False)
     iban = forms.CharField(max_length=24, strip=True)
     currency = forms.CharField(max_length=3, strip=True)
