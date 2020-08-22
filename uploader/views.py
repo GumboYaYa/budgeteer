@@ -3,7 +3,7 @@ from django.shortcuts import render
 from django.views.generic import ListView
 
 from .forms import FileUploadForm
-from .models import Transaction
+from apps.main.models import Transaction
 from .utils import cnvt_csv
 from .profiles import run_template
 

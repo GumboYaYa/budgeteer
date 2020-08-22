@@ -1,5 +1,5 @@
 from django import forms
-from .models import Iban, Bic, BookingType, Currency, Optionee, Transaction
+from apps.main.models import Iban, Bic, BookingType, Currency, Optionee, Transaction
 
 
 class FileUploadForm(forms.Form):
