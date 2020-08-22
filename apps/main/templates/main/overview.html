@@ -1,0 +1,28 @@
+{% extends "./base.html" %}
+
+{% block content %}
+    <h1>Imported Data</h1>
+    <div class="uk-overflow-auto">
+        <table class="uk-table uk-table-striped uk-table-hover">
+            <tr>
+                <th>Account</th>
+                <th>Booked on</th>
+                <th>Optionee</th>
+                <th>Reference</th>
+                <th>Figure</th>
+                <th>Currency</th>
+            </tr>
+            {% for object in imported_data %}
+            <tr>
+                <td>{{ object.account }}</td>
+                <td style="white-space: nowrap;">{{ object.date_booking }}</td>
+                <td>{{ object.optionee }}</td>
+                <td>{{ object.reference }}</td>
+                <td align="right">{{ object.figure }}</td>
+                <td>{{ object.currency }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    </ul>
+{% endblock %}
