@@ -38,7 +38,7 @@ def rm_quotes(s):
     return s.strip("\"")
 
 
-def cnvt_booking_type(s):
+def cnvt_booking_type(s, *args):
     if re.search("kartenzahl", s, flags=re.IGNORECASE):
         return "Kartenzahlung"
     elif re.search("lastsch", s, flags=re.IGNORECASE):
@@ -55,5 +55,9 @@ def cnvt_booking_type(s):
         return "Bargeldauszahlung"
     elif re.search("abschl", s, flags=re.IGNORECASE):
         return "Abschluss"
+    elif s == "":
+        for arg in args:
+            if re.search("kreditk", arg, flags=re.IGNORECASE):
+                return "Kreditkarte"
     else:
         return s

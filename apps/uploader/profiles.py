@@ -2,6 +2,19 @@ from .forms import FileUploadForm
 from .utils import cnvt_date, cnvt_float, rm_spaces, rm_quotes, cnvt_booking_type
 
 
+def save_form(data, item):
+    form = FileUploadForm(data)
+
+    if form.is_valid():
+        print("Form is valid.")
+        form.save()
+        print("Form saved.")
+    else:
+        print("Form is not valid:")
+        print(item)
+    print(form.errors)
+
+
 def do_has(data):
     for line in data[1:]:
         data_dict = {}
@@ -16,15 +29,7 @@ def do_has(data):
         data_dict["currency"] = line[15]
         # print(data_dict)
 
-        form = FileUploadForm(data_dict)
-
-        if form.is_valid():
-            print("Form is valid.")
-            form.save()
-            print("Form saved.")
-        else:
-            print("Form is not valid.")
-        print(form.errors)
+        save_form(data_dict, line)
 
 
 def do_dkb(data):
@@ -33,7 +38,7 @@ def do_dkb(data):
         data_dict = {}
         data_dict["iban"] = iban
         data_dict["date_booking"] = cnvt_date(line[0])
-        data_dict["booking_type"] = cnvt_booking_type(line[2])
+        data_dict["booking_type"] = cnvt_booking_type(line[2], line[3])
         data_dict["reference"] = rm_spaces(line[4])
         data_dict["optionee_name"] = rm_spaces(line[3])
         data_dict["optionee_iban"] = line[5]
@@ -41,16 +46,8 @@ def do_dkb(data):
         data_dict["figure"] = cnvt_float(line[7])
         data_dict["currency"] = "EUR"
         # print(data_dict)
-
-        form = FileUploadForm(data_dict)
-
-        if form.is_valid():
-            print("Form is valid.")
-            form.save()
-            print("Form saved.")
-        else:
-            print("Form is not valid.")
-        print(form.errors)
+        
+        save_form(data_dict, line)
 
 
 bank_templates = {

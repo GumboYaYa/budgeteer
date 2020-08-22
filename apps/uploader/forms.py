@@ -18,7 +18,7 @@ class FileUploadForm(forms.Form):
     optionee_bic = forms.CharField(max_length=11, strip=True)
     date_booking = forms.DateField()
     figure = forms.DecimalField(max_digits=18, decimal_places=2)
-    reference = forms.CharField(max_length=500, strip=True)
+    reference = forms.CharField(max_length=500, strip=True, required=False)
 
     def save(self):
         data = self.cleaned_data
