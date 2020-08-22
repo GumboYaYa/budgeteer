@@ -32,7 +32,7 @@ ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     'apps.main.apps.MainConfig',
-    'uploader.apps.UploaderConfig',
+    'apps.uploader.apps.UploaderConfig',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',

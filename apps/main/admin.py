@@ -1,3 +1,8 @@
 from django.contrib import admin
 
-# Register your models here.
+from .models import Iban, Bic, BookingType, Currency, Optionee, Transaction
+
+
+@admin.register(Iban, Bic, BookingType, Currency, Optionee, Transaction)
+class TransactionsAdmin(admin.ModelAdmin):
+    pass
