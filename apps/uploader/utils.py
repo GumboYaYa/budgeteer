@@ -55,6 +55,8 @@ def cnvt_booking_type(s, *args):
         return "Bargeldauszahlung"
     elif re.search("abschl", s, flags=re.IGNORECASE):
         return "Abschluss"
+    elif re.search("berweisung", s, flags=re.IGNORECASE):
+        return "Überweisung"
     elif s == "":
         for arg in args:
             if re.search("kreditk", arg, flags=re.IGNORECASE):
