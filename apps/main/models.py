@@ -47,7 +47,7 @@ class Transaction(models.Model):
     optionee = models.ForeignKey(Optionee, on_delete=models.CASCADE)
     figure = models.DecimalField(max_digits=18, decimal_places=2)
     currency = models.ForeignKey(Currency, on_delete=models.CASCADE)
-    reference = models.CharField(max_length=500, blank=True)
+    reference = models.CharField(max_length=500, blank=True, default='')
 
     def __str__(self):
         return str(self.figure)
