@@ -4,9 +4,9 @@ from decimal import *
 
 
 def cnvt_csv(file):
-        data = file.replace("\"", "")
-        lines = data.splitlines()
-        return [x.split(";") for x in lines]
+    data = file.replace("\"", "")
+    lines = data.splitlines()
+    return [x.split(";") for x in lines]
 
 
 def cnvt_date(s):

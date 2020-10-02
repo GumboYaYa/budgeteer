@@ -1,5 +1,7 @@
+# TODO: Duplicate class "Account" - ERROR!
+
 from django import forms
-from apps.main.models import Iban, Bic, BookingType, Currency, Optionee, Transaction
+from apps.main.models import Account, Optionee, Transaction
 
 
 class FileUploadForm(forms.Form):
@@ -23,37 +25,27 @@ class FileUploadForm(forms.Form):
     def save(self):
         data = self.cleaned_data
 
-        iban, created = Iban.objects.get_or_create(iban=data["iban"])
+        account, created = Account.objects.get_or_create(
+            iban=data["iban"]
+        )
         if created:
-            iban.save()
+            account.save()
 
-        o_iban, created = Iban.objects.get_or_create(iban=data["optionee_iban"])
+        optionee, created = Optionee.objects.get_or_create(
+            iban=data["optionee_iban"],
+            name=data["optionee_name"],
+            bic=data["optionee_bic"]
+        )
         if created:
-            o_iban.save()
-
-        bic, created = Bic.objects.get_or_create(bic=data["optionee_bic"])
-        if created:
-            bic.save()
-
-        b_type, created = BookingType.objects.get_or_create(name=data["booking_type"])
-        if created:
-            b_type.save()
-
-        curr, created = Currency.objects.get_or_create(currency_short=data["currency"])
-        if created:
-            curr.save()
-
-        opt, created = Optionee.objects.get_or_create(name=data["optionee_name"], iban=o_iban, bic=bic)
-        if created:
-            opt.save()
+            optionee.save()
 
         transaction, created = Transaction.objects.get_or_create(
-            account=iban,
+            account=account,
             date_booking=data["date_booking"],
-            booking_type=b_type,
-            optionee=opt,
+            booking_type=['booking_type'],
+            optionee=optionee,
             figure=data["figure"],
-            currency=curr,
+            currency=['currency'],
             reference=data["reference"],
         )
         if created:
