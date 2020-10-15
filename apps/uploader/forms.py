@@ -1,5 +1,3 @@
-# TODO: Duplicate class "Account" - ERROR!
-
 from django import forms
 from apps.main.models import Account, Optionee, Transaction
 
@@ -12,6 +10,7 @@ class FileUploadForm(forms.Form):
 
     bank = forms.ChoiceField(choices=choices_bank, required=False)
     file = forms.FileField(required=False)
+    
     iban = forms.CharField(max_length=24, strip=True)
     currency = forms.CharField(max_length=3, strip=True)
     booking_type = forms.CharField(max_length=50, strip=True)

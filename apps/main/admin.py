@@ -1,8 +1,10 @@
 from django.contrib import admin
 
-from .models import Iban, Bic, BookingType, Currency, Optionee, Transaction
+# TODO: The commented code crashes the server. Investigate why.
+
+# from .models import Account, Optionee, Transaction
 
 
-@admin.register(Iban, Bic, BookingType, Currency, Optionee, Transaction)
-class TransactionsAdmin(admin.ModelAdmin):
-    pass
+# @admin.register(Account, Optionee, Transaction)
+# class TransactionsAdmin(admin.ModelAdmin):
+#     pass
