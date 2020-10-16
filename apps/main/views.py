@@ -1,7 +1,9 @@
-from django.views.generic import ListView
+from django.shortcuts import render
 from .models import Transaction
 
-class Overview(ListView):
-    model = Transaction
-    template_name = "main/overview.html"
-    context_object_name = "overview"
+
+def list_view(request):
+    context = {}
+    context["dataset"] = Transaction.objects.all()
+
+    return render(request, "main/index.html", context)

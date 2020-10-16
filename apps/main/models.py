@@ -14,14 +14,14 @@ import datetime
 
 
 class Account(Document):
-    iban = StringField(max_length=22, primary_key=True, default="DE00000000000000000000")
+    iban = StringField(max_length=34, primary_key=True, default="DE00000000000000000000")
 
     def __str__(self):
         return self.iban
 
 
 class Optionee(Document):
-    iban = StringField(max_length=22, Primary_key=True, default="DE00000000000000000000")
+    iban = StringField(max_length=34, primary_key=True, default="DE00000000000000000000")
     name = StringField(max_length=200, default="Max Mustermann")
     bic = StringField(max_length=11, default="BICXXXXXXXX")
 
