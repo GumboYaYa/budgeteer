@@ -39,5 +39,14 @@ class Transaction(Document):
     currency = StringField(max_length=4, default="EUR")
     reference = StringField(max_length=500, default="-")
 
+    meta = {
+        "indexes": [
+            {
+                "fields": ["date_booking", "figure", "reference"],
+                "unique": True
+            }
+        ]
+    }
+
     def __str__(self):
         return str(self.figure)

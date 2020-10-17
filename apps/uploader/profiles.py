@@ -53,7 +53,11 @@ def do_dkb(data):
             currency="EUR",
             reference=rm_spaces(line[4])
         )
-        d_transaction.save()
+        try:
+            d_transaction.save()
+        except:
+            continue
+
 
 bank_templates = {
     "HAS": do_has,
