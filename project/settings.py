@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/3.0/ref/settings/
 """
 
 import os
+from mongoengine import connect
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,16 +78,20 @@ WSGI_APPLICATION = 'project.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'OPTIONS': {'options': '-c search_path=bt'},
-        'HOST': os.environ["DB_HOST"],
-        'NAME': os.environ["DB_NAME"],
-        'USER': os.environ["DB_USER"],
-        'PASSWORD': os.environ["DB_PWRD"],
-        'PORT': os.environ["DB_PORT"],
+        'ENGINE': ''
     }
 }
 
+_MONGODB_USER = os.environ['DB_USER']
+_MONGODB_PWRD = os.environ['DB_PWRD']
+_MONGODB_NAME = os.environ['DB_NAME']
+_MONGODB_HOST = os.environ['DB_HOST']
+
+connect('budgeteer')
+# connect(
+#     _MONGODB_NAME, 
+#     host=f'mongodb+srv://{_MONGODB_USER}:{_MONGODB_PWRD}@{_MONGODB_HOST}/{_MONGODB_NAME}?retryWrites=true&w=majority'
+# )
 
 # Password validation
 # https://docs.djangoproject.com/en/3.0/ref/settings/#auth-password-validators

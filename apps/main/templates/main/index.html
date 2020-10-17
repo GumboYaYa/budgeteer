@@ -1,7 +1,7 @@
 {% extends "./base.html" %}
 
 {% block content %}
-    <h1>Imported Data</h1>
+    <h1>Transactions</h1>
     <div class="uk-overflow-auto">
         <table class="uk-table uk-table-striped uk-table-hover">
             <tr>
@@ -12,7 +12,7 @@
                 <th>Figure</th>
                 <th>Currency</th>
             </tr>
-            {% for object in imported_data %}
+            {% for object in dataset %}
             <tr>
                 <td>{{ object.account }}</td>
                 <td style="white-space: nowrap;">{{ object.date_booking }}</td>

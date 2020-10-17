@@ -1,8 +1,9 @@
 from django.shortcuts import render
-from django.views.generic import ListView
 from .models import Transaction
 
-class Overview(ListView):
-    model = Transaction
-    template_name = "uploader/success.html"
-    context_object_name = "imported_data"
+
+def list_view(request):
+    context = {}
+    context["dataset"] = Transaction.objects().order_by("-date_booking")
+
+    return render(request, "main/index.html", context)

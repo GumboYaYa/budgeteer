@@ -1,9 +1,7 @@
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponseRedirect
 from django.shortcuts import render
-from django.views.generic import ListView
 
 from .forms import FileUploadForm
-from apps.main.models import Transaction
 from .utils import cnvt_csv
 from .profiles import run_template
 
@@ -24,14 +22,8 @@ def upload_file(request):
         bank_id = request.POST["bank"]
         run_template(bank_id, fields)
 
-        return HttpResponseRedirect("success/")
+        return HttpResponseRedirect("/index.html")
     else:
         form = FileUploadForm()
         print("Form is not POST method!")
     return render(request, "uploader/index.html", {"form": form})
-
-
-class ImportedData(ListView):
-    model = Transaction
-    template_name = "uploader/success.html"
-    context_object_name = "imported_data"
