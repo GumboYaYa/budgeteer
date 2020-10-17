@@ -87,10 +87,11 @@ _MONGODB_PWRD = os.environ['DB_PWRD']
 _MONGODB_NAME = os.environ['DB_NAME']
 _MONGODB_HOST = os.environ['DB_HOST']
 
-connect(
-    _MONGODB_NAME, 
-    host=f'mongodb+srv://{_MONGODB_USER}:{_MONGODB_PWRD}@{_MONGODB_HOST}/{_MONGODB_NAME}?retryWrites=true&w=majority'
-)
+connect('budgeteer')
+# connect(
+#     _MONGODB_NAME, 
+#     host=f'mongodb+srv://{_MONGODB_USER}:{_MONGODB_PWRD}@{_MONGODB_HOST}/{_MONGODB_NAME}?retryWrites=true&w=majority'
+# )
 
 # Password validation
 # https://docs.djangoproject.com/en/3.0/ref/settings/#auth-password-validators
