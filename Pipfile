@@ -8,8 +8,10 @@ mongoengine = "*"
 django = "*"
 dnspython = "*"
 djangorestframework = "*"
+pytest = "*"
 
 [dev-packages]
+isort = "*"
 
 [requires]
 python_version = "3.8"
