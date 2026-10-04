@@ -36,6 +36,43 @@ budgeteer backup [--out dir]
 
 All commands take `--db` (default `./data/budgeteer.db`).
 
+## Querying the database
+
+The database is a plain SQLite file. It is created at `data/budgeteer.db`, relative to the directory you run `budgeteer` from, on the first command. To pin it to one place, pass `--db` or set `BUDGETEER_DB`:
+
+```
+export BUDGETEER_DB=/path/to/budgeteer/data/budgeteer.db
+```
+
+Open an interactive session with the `sqlite3` tool (ships with macOS):
+
+```
+sqlite3 data/budgeteer.db
+```
+
+```
+.tables                  -- list tables and views
+.schema accounts         -- show how a table is defined
+.mode box                -- readable table output
+.headers on
+SELECT * FROM accounts;
+.quit
+```
+
+Or run a single query from the shell:
+
+```
+sqlite3 -box data/budgeteer.db "SELECT slug, name, iban FROM accounts"
+```
+
+Amounts are stored in cents; divide to get euros:
+
+```sql
+SELECT booking_date, counterparty, amount_cents / 100.0 AS eur FROM transactions;
+```
+
+Querying while `budgeteer` is running is safe.
+
 ## Development
 
 Requires Go 1.27 or newer.
