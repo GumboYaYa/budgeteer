@@ -1,3 +1,4 @@
+-- +goose Up
 -- 0001_init.sql — initial schema for Budgeteer
 -- Conventions:
 --   * dates are ISO-8601 TEXT (YYYY-MM-DD), timestamps UTC (YYYY-MM-DDTHH:MM:SSZ)

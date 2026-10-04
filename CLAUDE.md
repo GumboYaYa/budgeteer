@@ -47,11 +47,11 @@ This repo handles real bank data. Never commit `data/`, a database file, or a re
 
 ## Commands
 
-Available once Phase 1 is done:
-
 ```
 make build      # build ./budgeteer
 make test       # go test ./...
+make vet
+make run ARGS="account list"
 make generate   # templ generate (from Phase 3)
 make css        # tailwind build (from Phase 3)
 ```

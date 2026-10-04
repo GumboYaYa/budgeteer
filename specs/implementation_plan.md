@@ -68,19 +68,19 @@ internal/
 testdata/   data/ (ignored)   Makefile   README.md
 ```
 
-- [ ] **1.1 Module & tooling.** `go mod init github.com/GumboYaYa/budgeteer`. `Makefile` targets: `build`, `test`, `generate` (templ), `css` (tailwind), `run`. Short `README.md` (setup, commands).
-- [ ] **1.2 `internal/money`.**
+- [x] **1.1 Module & tooling.** `go mod init github.com/GumboYaYa/budgeteer`. `Makefile` targets: `build`, `test`, `vet`, `run`; `generate` (templ) and `css` (tailwind) are added in Phase 3. Short `README.md` (setup, commands).
+- [x] **1.2 `internal/money`.**
   - `ParseDE(string) (int64, error)`: `-9,99`, `1.234,56`, `-57`.
   - `ParseEN(string) (int64, error)`: `-16.45`, `4,602.28`.
   - `Format(cents int64) string` → `-9.99` (for export) and `FormatDE` → `-9,99 €` (for UI).
   - Rules: optional sign, 0–2 decimals (`9,9` → 990), reject 3+ decimals, empty string, stray characters. Integer arithmetic only.
   - Table-driven tests with all five spec examples plus the error cases.
-- [ ] **1.3 `internal/store`.**
+- [x] **1.3 `internal/store`.**
   - `Open(path)`: creates the parent dir, DSN with `_pragma=journal_mode(WAL)`, `_pragma=busy_timeout(5000)`, `_pragma=foreign_keys(1)` and `_txlock=immediate`, so the pragmas apply to every pooled connection.
   - Add `-- +goose Up` as the first line of `0001_init.sql`; `Migrate(db)` runs goose on the embedded FS. Idempotent.
   - Account queries: `CreateAccount`, `AccountBySlug`, `AccountByIBAN`, `ListAccounts`, `SetCutover`.
   - Tests: fresh DB migrates; second `Migrate` is a no-op; `foreign_keys` is actually on (insert with a bad FK fails); `uncategorized` view exists.
-- [ ] **1.4 CLI skeleton (`cmd/budgeteer`).** kong struct with global `--db` (default `./data/budgeteer.db`); commands `migrate`, `account add`, `account list`. Every command opens the store and applies pending migrations. Other commands are added in their phases.
+- [x] **1.4 CLI skeleton (`cmd/budgeteer`).** kong struct with global `--db` (default `./data/budgeteer.db`); commands `migrate`, `account add`, `account list`. Every command opens the store and applies pending migrations. Other commands are added in their phases.
 
 **Done when:** `make test` passes; `budgeteer migrate && budgeteer account add --slug giro --name Giro --bank dkb && budgeteer account list` works in an empty directory.
 
