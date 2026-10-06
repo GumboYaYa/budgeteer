@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GumboYaYa/budgeteer/internal/importer"
+	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
@@ -325,7 +326,12 @@ func (s *server) importPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, importPage(count))
+	accounts, err := s.st.ListAccounts(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, importPage(count, accounts))
 }
 
 func (s *server) importUpload(w http.ResponseWriter, r *http.Request) {
@@ -337,11 +343,24 @@ func (s *server) importUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	summary, err := importer.Run(r.Context(), s.st, finanzguru.Parser{}, file, header.Filename, importer.Options{
-		RawDir:  s.rawDir,
-		Cutover: r.FormValue("cutover"),
-		Force:   r.FormValue("force") == "1",
-	})
+	opts := importer.Options{RawDir: s.rawDir, Force: r.FormValue("force") == "1"}
+	var parser importer.Parser
+	switch source := r.FormValue("source"); source {
+	case "", finanzguru.Source:
+		parser = finanzguru.Parser{}
+		opts.Cutover = r.FormValue("cutover")
+	case dkb.Source:
+		opts.Account = r.FormValue("account")
+		if opts.Account == "" {
+			s.render(w, r, importResult(importer.Summary{}, "Choose the account this DKB export belongs to."))
+			return
+		}
+		parser = dkb.Parser{Account: opts.Account}
+	default:
+		s.fail(w, r, badRequestf("unknown import source %q", source))
+		return
+	}
+	summary, err := importer.Run(r.Context(), s.st, parser, file, header.Filename, opts)
 	if err != nil {
 		// Import errors describe the file (line, column) and are meant for the user.
 		s.render(w, r, importResult(importer.Summary{}, err.Error()))

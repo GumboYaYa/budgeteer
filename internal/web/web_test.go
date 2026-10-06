@@ -510,3 +510,41 @@ func TestPagerAboveAndBelow(t *testing.T) {
 		}
 	}
 }
+
+func TestImportUploadDKB(t *testing.T) {
+	e := newEnv(t, false)
+	ctx := context.Background()
+	for _, a := range []store.Account{
+		{Slug: "girokonto", Name: "Girokonto", IBAN: "DE00111122223333444401"},
+		{Slug: "gemeinschaftskonto", Name: "Gemeinschaftskonto", IBAN: "DE00111122223333444402"},
+	} {
+		if _, err := e.st.CreateAccount(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const file = "../../testdata/dkb_a.csv"
+
+	if _, body := e.get("/import"); !strings.Contains(body, `value="dkb_csv"`) || !strings.Contains(body, `<option value="girokonto">`) {
+		t.Error("import page lacks the DKB source or the account choice")
+	}
+	if _, body := upload(e, file, map[string]string{"source": "dkb_csv"}); !strings.Contains(body, "Choose the account") {
+		t.Errorf("DKB upload without account: %s", body)
+	}
+	if _, body := upload(e, file, map[string]string{"source": "dkb_csv", "account": "nope"}); !strings.Contains(body, "does not exist") {
+		t.Errorf("DKB upload with unknown account: %s", body)
+	}
+	status, body := upload(e, file, map[string]string{"source": "dkb_csv", "account": "girokonto"})
+	if status != http.StatusOK || !strings.Contains(body, "Import finished") || !strings.Contains(body, "Not booked yet") {
+		t.Fatalf("DKB upload: status %d, body %s", status, body)
+	}
+	if got := e.text(`SELECT count(*) || '|' || sum(is_transfer) FROM transactions WHERE source = 'dkb_csv'`); got != "7|1" {
+		t.Errorf("transactions|transfers = %s, want 7|1", got)
+	}
+	// The new transactions wait in the inbox; the statement row and the transfer do not.
+	if _, body := e.get("/inbox"); strings.Count(body, `class="tx-row"`) != 5 {
+		t.Errorf("inbox has %d rows, want 5", strings.Count(body, `class="tx-row"`))
+	}
+	if status, _ := upload(e, file, map[string]string{"source": "xls"}); status != http.StatusBadRequest {
+		t.Errorf("unknown source: status %d, want 400", status)
+	}
+}

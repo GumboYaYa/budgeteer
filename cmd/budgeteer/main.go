@@ -20,6 +20,7 @@ import (
 
 	"github.com/GumboYaYa/budgeteer/internal/export"
 	"github.com/GumboYaYa/budgeteer/internal/importer"
+	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 	"github.com/GumboYaYa/budgeteer/internal/web"
@@ -31,11 +32,13 @@ type cli struct {
 	Serve   serveCmd   `cmd:"" help:"Start the web UI."`
 	Migrate migrateCmd `cmd:"" help:"Create or update the database schema."`
 	Account struct {
-		Add  accountAddCmd  `cmd:"" help:"Add one of your own bank accounts."`
-		List accountListCmd `cmd:"" help:"List accounts."`
+		Add        accountAddCmd        `cmd:"" help:"Add one of your own bank accounts."`
+		List       accountListCmd       `cmd:"" help:"List accounts."`
+		SetCutover accountSetCutoverCmd `cmd:"" help:"Set the date up to which Finanzguru provides an account's transactions; bank exports take over after it."`
 	} `cmd:"" help:"Manage accounts."`
 	Import struct {
 		Finanzguru importFinanzguruCmd `cmd:"" help:"Import a Finanzguru export. Can be repeated with newer exports; only new transactions are added."`
+		DKB        importDKBCmd        `cmd:"" name:"dkb" help:"Import a DKB account export (CSV). Exports may overlap; only new transactions are added."`
 	} `cmd:"" help:"Import transactions from a file."`
 	Export exportCmd `cmd:"" help:"Write all data as CSV or Parquet files."`
 	Backup backupCmd `cmd:"" help:"Write a consistent copy of the database."`
@@ -132,6 +135,44 @@ func (accountListCmd) Run(ctx context.Context, st *store.Store) error {
 	return w.Flush()
 }
 
+type accountSetCutoverCmd struct {
+	Slug string `required:"" help:"Account to change."`
+	Date string `required:"" placeholder:"YYYY-MM-DD" help:"Last day covered by Finanzguru."`
+}
+
+func (c accountSetCutoverCmd) Run(ctx context.Context, st *store.Store) error {
+	if err := importer.SetCutover(ctx, st, c.Slug, c.Date, finanzguru.Source); err != nil {
+		return err
+	}
+	fmt.Printf("cut-over date of %s set to %s\n", c.Slug, c.Date)
+	return nil
+}
+
+type importDKBCmd struct {
+	File    string `arg:"" type:"existingfile" help:"CSV export of the account's transactions from DKB."`
+	Account string `required:"" help:"Slug of the account the file belongs to (see: budgeteer account list)."`
+	Force   bool   `help:"Process the file even if it was imported before, and overwrite the details of existing transactions with those in the file. Categories and transfer flags set by hand are kept."`
+}
+
+func (c importDKBCmd) Run(ctx context.Context, st *store.Store, db dbPath) error {
+	f, err := os.Open(c.File)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	summary, err := importer.Run(ctx, st, dkb.Parser{Account: c.Account}, f, c.File, importer.Options{
+		RawDir:  rawDir(db),
+		Account: c.Account,
+		Force:   c.Force,
+	})
+	if err != nil {
+		return err
+	}
+	printSummary(summary)
+	return nil
+}
+
 type importFinanzguruCmd struct {
 	File    string `arg:"" type:"existingfile" help:"CSV export from Finanzguru."`
 	Cutover string `placeholder:"YYYY-MM-DD" help:"Import only transactions up to this date and store it as the cut-over date of the accounts in the file."`
@@ -215,6 +256,9 @@ func printSummary(s importer.Summary) {
 	}
 	if s.SkippedCutover > 0 {
 		fmt.Printf("skipped by cut-over:   %d\n", s.SkippedCutover)
+	}
+	if s.SkippedPending > 0 {
+		fmt.Printf("not booked yet:        %d (they come with a later export)\n", s.SkippedPending)
 	}
 	if len(s.AccountsCreated) > 0 {
 		fmt.Printf("accounts created:      %s\n", strings.Join(s.AccountsCreated, ", "))

@@ -2,6 +2,9 @@ package web
 
 import (
 	"github.com/GumboYaYa/budgeteer/internal/importer"
+	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
+	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/store"
 	"github.com/GumboYaYa/budgeteer/internal/money"
 	"strconv"
 	"strings"
@@ -124,7 +127,7 @@ templ statTile(label, value, note string) {
 	</div>
 }
 
-templ importPage(inbox int) {
+templ importPage(inbox int, accounts []store.Account) {
 	@layout("Import", "import", inbox) {
 		<h1 class="text-2xl font-semibold mb-3">Import</h1>
 		<div class="grid lg:grid-cols-2 gap-4">
@@ -138,11 +141,32 @@ templ importPage(inbox int) {
 				hx-target="#import-result"
 				hx-disabled-elt="find button"
 			>
+				<fieldset class="flex flex-col gap-2 text-sm">
+					<legend class="mb-1">Source</legend>
+					<label class="flex items-center gap-2">
+						<input type="radio" name="source" value={ finanzguru.Source } class="radio radio-sm" checked/>
+						Finanzguru export
+					</label>
+					<label class="flex items-center gap-2">
+						<input type="radio" name="source" value={ dkb.Source } class="radio radio-sm"/>
+						DKB account export
+					</label>
+				</fieldset>
 				<label class="flex flex-col gap-1 text-sm">
-					Finanzguru export (CSV)
+					File (CSV)
 					<input type="file" name="file" accept=".csv,text/csv" class="file-input w-full" required/>
 				</label>
-				<label class="flex flex-col gap-1 text-sm">
+				<label class="flex flex-col gap-1 text-sm" data-source={ dkb.Source }>
+					Account
+					<select name="account" class="select w-full">
+						<option value="">Choose…</option>
+						for _, a := range accounts {
+							<option value={ a.Slug }>{ a.Name }</option>
+						}
+					</select>
+					<span class="text-xs text-base-content/60">A DKB export covers one account. If the account also has Finanzguru history, it needs a cut-over date first; the import tells you how to set it.</span>
+				</label>
+				<label class="flex flex-col gap-1 text-sm" data-source={ finanzguru.Source }>
 					Cut-over date (optional)
 					<input type="date" name="cutover" class="input"/>
 					<span class="text-xs text-base-content/60">Import only transactions up to this date and remember it for the accounts in the file. Leave empty while Finanzguru is your only source.</span>
@@ -157,11 +181,13 @@ templ importPage(inbox int) {
 				<button class="btn btn-primary self-start">Import file</button>
 			</form>
 			<div id="import-result">
-				<div class="bg-base-100 rounded-box border border-base-300 p-4 text-sm text-base-content/70">
-					<p>Each Finanzguru export contains your full history. Importing a newer export adds only the transactions that are not here yet and picks up category changes you made in Finanzguru.</p>
+				<div class="bg-base-100 rounded-box border border-base-300 p-4 text-sm text-base-content/70 flex flex-col gap-2">
+					<p>A Finanzguru export contains your full history. Importing a newer one adds only the transactions that are not here yet and picks up category changes you made in Finanzguru.</p>
+					<p>DKB exports may overlap: transactions that are already here are skipped. Bookings that are still pending are left out and come with a later export.</p>
 				</div>
 			</div>
 		</div>
+		<script src="/static/import.js" defer></script>
 	}
 }
 
@@ -194,6 +220,9 @@ templ importResult(s importer.Summary, problem string) {
 					}
 					if s.SkippedCutover > 0 {
 						@summaryRow("Skipped by cut-over date", s.SkippedCutover)
+					}
+					if s.SkippedPending > 0 {
+						@summaryRow("Not booked yet (they come with a later export)", s.SkippedPending)
 					}
 					if s.SkippedSuperseded > 0 {
 						@summaryRow("Split originals (their parts are imported instead)", s.SkippedSuperseded)

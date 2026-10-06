@@ -1,0 +1,13 @@
+Girokonto,DE00111122223333444401,,,,,,,,,,
+,,,,,,,,,,,
+Kontostand vom 10.10.2026:,"5.000,00 €",,,,,,,,,,
+,,,,,,,,,,,
+Buchungsdatum,Wertstellung,Status,Zahlungspflichtige*r,Zahlungsempfänger*in,Verwendungszweck,Umsatztyp,IBAN,Betrag (€),Gläubiger-ID,Mandatsreferenz,Kundenreferenz
+10.10.26,,Vorgemerkt,Max Mustermann,Tankstelle Nord,VISA Debitkartenumsatz,Ausgang,DE00999900000000000009,"-45,00",,,
+09.10.26,09.10.26,Gebucht,Max Mustermann,Baeckerei Beispiel,VISA Debitkartenumsatz vom 08.10.2026,Ausgang,DE00999900000000000009,"-3,50",,,
+09.10.26,09.10.26,Gebucht,Max Mustermann,Baeckerei Beispiel,VISA Debitkartenumsatz vom 08.10.2026,Ausgang,DE00999900000000000009,"-3,50",,,
+08.10.26,08.10.26,Gebucht,Max Mustermann,Max Mustermann,Haushaltskasse,Ausgang,DE00111122223333444402,-500,,,
+07.10.26,07.10.26,Gebucht,Max Mustermann,Hausverwaltung Beispiel,Miete 10/2026,Ausgang,DE00999900000000000003,"-1.234,56",,MIETE-1,KREF-77
+05.10.26,05.10.26,Gebucht,Beispiel GmbH,Max Mustermann,Lohn/Gehalt 10/2026,Eingang,DE00999900000000000001,"2.500,00",,,
+02.10.26,02.10.26,Gebucht,,DKB AG,Abrechnung 30.09.2026,,1234567890,0,,,
+01.10.26,01.10.26,Gebucht,Max Mustermann,"Rundfunk ARD, ZDF, DRadio",Rundfunkbeitrag 10.2026,Ausgang,DE00999900000000000002,"-18,36",DE00ZZZ00000000001,MR-12345,

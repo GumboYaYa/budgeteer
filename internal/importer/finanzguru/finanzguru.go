@@ -76,8 +76,12 @@ type Parser struct{}
 func (Parser) Source() string             { return Source }
 func (Parser) Side() importer.CutoverSide { return importer.UpToCutover }
 
-func (Parser) Read(r io.Reader) ([]importer.RawRow, error) {
-	return importer.ReadCSV(r, requiredColumns)
+// Finanzguru states transfers itself (Analyse-Umbuchung).
+func (Parser) OwnAccountTransfers() bool { return false }
+
+func (Parser) Read(r io.Reader) (importer.File, error) {
+	rows, err := importer.ReadCSV(r, requiredColumns)
+	return importer.File{Rows: rows}, err
 }
 
 func (Parser) Normalize(rows []importer.RawRow) ([]importer.Candidate, error) {

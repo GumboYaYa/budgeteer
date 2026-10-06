@@ -12,7 +12,7 @@ Local, single-user personal finance app in Go: import bank transactions (Finanzg
 
 - No split transactions: exactly one allocation per transaction, for the full amount. The `allocations` table stays.
 - Automatic categorization (`rules.yaml`, suggestions, `categorize` command) is deferred. Categorization is manual in the inbox. Do not build it unless asked.
-- Finanzguru is the only data source for now and is re-imported repeatedly as a full export. The DKB importer is the last phase.
+- Finanzguru is the main data source for now and is re-imported repeatedly as a full export. The DKB importer exists for the later switch; an account's cut-over date decides which source owns which days.
 
 ## Layout
 

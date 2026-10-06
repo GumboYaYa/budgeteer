@@ -37,10 +37,23 @@ type Parser interface {
 	// Source is the value stored in imports.source and transactions.source.
 	Source() string
 	Side() CutoverSide
+	// OwnAccountTransfers reports whether a row whose counterparty reference
+	// is the IBAN of another own account should be flagged as a transfer.
+	// Sources that state transfers themselves return false.
+	OwnAccountTransfers() bool
 	// Read splits the file into its data rows.
-	Read(r io.Reader) ([]RawRow, error)
+	Read(r io.Reader) (File, error)
 	// Normalize maps every row to a candidate, in the same order.
 	Normalize(rows []RawRow) ([]Candidate, error)
+}
+
+// File is the content of an import file.
+type File struct {
+	Rows []RawRow
+	// Balance is the account balance at the end of BalanceDate, if the file
+	// states one for the whole file (empty BalanceDate otherwise).
+	Balance     int64
+	BalanceDate string // YYYY-MM-DD
 }
 
 // RawRow is one data row exactly as it appears in the file.
@@ -53,9 +66,15 @@ type RawRow struct {
 type Candidate struct {
 	Row RawRow
 
-	// Account the row belongs to; it is matched by IBAN and created if missing.
+	// Account the row belongs to; it is matched by IBAN and created if
+	// missing. Unused when Options.Account names the account.
 	AccountIBAN string
 	AccountName string
+
+	// Pending marks a row the bank has not booked yet. It is kept in the raw
+	// layer only: its text can still change, and it comes back as booked in a
+	// later file.
+	Pending bool
 
 	// Tx holds the normalized fields. IDs are filled in by the pipeline.
 	Tx store.Transaction
@@ -78,6 +97,9 @@ type Candidate struct {
 }
 
 type Options struct {
+	// Account is the slug of the account all rows belong to, for sources
+	// whose files cover one account and do not identify it reliably.
+	Account string
 	// RawDir receives a copy of the original file. Empty disables the copy.
 	RawDir string
 	// Cutover (YYYY-MM-DD), if set, becomes the cut-over date of every account
@@ -98,6 +120,7 @@ type Summary struct {
 	Updated           int  // existing transactions whose category was refreshed
 	FieldsUpdated     int  // existing transactions whose details were overwritten (Force)
 	SkippedCutover    int  // rows on the other side of the cut-over date
+	SkippedPending    int  // rows the bank has not booked yet
 	SkippedSuperseded int  // rows replaced by other rows of the file (split originals)
 	Removed           int  // existing transactions deleted because they are now superseded
 	AccountsCreated   []string
@@ -129,10 +152,11 @@ func Run(ctx context.Context, st *store.Store, p Parser, file io.Reader, fileNam
 		return Summary{AlreadyImported: true}, nil
 	}
 
-	rows, err := p.Read(bytes.NewReader(content))
+	parsed, err := p.Read(bytes.NewReader(content))
 	if err != nil {
 		return Summary{}, fmt.Errorf("%s: %w", fileName, err)
 	}
+	rows := parsed.Rows
 	candidates, err := p.Normalize(rows)
 	if err != nil {
 		return Summary{}, fmt.Errorf("%s: %w", fileName, err)
@@ -141,6 +165,9 @@ func Run(ctx context.Context, st *store.Store, p Parser, file io.Reader, fileNam
 	var summary Summary
 	err = st.InTx(ctx, func(tx *store.Store) error {
 		run := &run{tx: tx, parser: p, opts: opts, importID: importID, summary: Summary{Rows: len(rows)}}
+		if parsed.BalanceDate != "" {
+			run.fileBalance = &balance{cents: parsed.Balance, date: parsed.BalanceDate}
+		}
 		if err := run.importAll(ctx, fileName, hash, candidates); err != nil {
 			return err
 		}
@@ -181,6 +208,11 @@ type run struct {
 	accounts   map[string]store.Account // by normalized IBAN
 	categories map[string]int64         // by slug
 	balances   map[int64]balance        // by account id: newest stated balance among imported days
+	ownIBANs   map[string]int64         // IBAN → account id, for transfer detection
+	// fixed is the account of Options.Account; fileBalance its balance as
+	// stated by the file.
+	fixed       *store.Account
+	fileBalance *balance
 }
 
 type balance struct {
@@ -194,10 +226,39 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 	r.balances = make(map[int64]balance)
 
 	var err error
+	var fixedID int64
+	if r.opts.Account != "" {
+		a, err := r.tx.AccountBySlug(ctx, r.opts.Account)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("account %q does not exist; create it with: budgeteer account add --slug %s --name <name>", r.opts.Account, r.opts.Account)
+		}
+		if err != nil {
+			return err
+		}
+		if err := r.checkSourceMix(ctx, a); err != nil {
+			return err
+		}
+		r.fixed, fixedID = &a, a.ID
+		if r.fileBalance != nil {
+			r.balances[a.ID] = *r.fileBalance
+		}
+	}
+	if r.parser.OwnAccountTransfers() {
+		accounts, err := r.tx.ListAccounts(ctx)
+		if err != nil {
+			return err
+		}
+		r.ownIBANs = make(map[string]int64)
+		for _, a := range accounts {
+			if a.IBAN != "" {
+				r.ownIBANs[a.IBAN] = a.ID
+			}
+		}
+	}
 	// importID is already set when an identical file is processed again.
 	if r.importID == 0 {
 		r.importID, err = r.tx.CreateImport(ctx, store.Import{
-			Source: r.parser.Source(), FileName: fileName, SHA256: hash, RowCount: r.summary.Rows,
+			Source: r.parser.Source(), FileName: fileName, SHA256: hash, RowCount: r.summary.Rows, AccountID: fixedID,
 		})
 		if err != nil {
 			return err
@@ -220,6 +281,18 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			}
 			r.summary.SkippedCutover++
 			continue
+		}
+
+		if c.Pending {
+			if _, err := r.storeRaw(ctx, c.Row); err != nil {
+				return err
+			}
+			r.summary.SkippedPending++
+			continue
+		}
+
+		if other, ok := r.ownIBANs[store.NormalizeIBAN(c.Tx.CounterpartyRef)]; ok && other != account.ID {
+			c.Tx.IsTransfer = true
 		}
 
 		if c.HasDayEndBalance && c.Tx.BookingDate >= r.balances[account.ID].date {
@@ -294,6 +367,9 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 
 	// Remember the newest balance the file states for each account. An older
 	// file must not replace a newer balance.
+	if r.fixed != nil {
+		r.accounts[r.fixed.IBAN] = *r.fixed
+	}
 	for _, account := range r.accounts {
 		b, ok := r.balances[account.ID]
 		if !ok || b.date < account.BalanceDate {
@@ -331,6 +407,9 @@ func (r *run) storeRaw(ctx context.Context, row RawRow) (int64, error) {
 // account finds the candidate's account by IBAN or creates it, and applies a
 // new cut-over date the first time the account is seen in this import.
 func (r *run) account(ctx context.Context, c Candidate) (store.Account, error) {
+	if r.fixed != nil {
+		return *r.fixed, nil
+	}
 	iban := store.NormalizeIBAN(c.AccountIBAN)
 	if iban == "" {
 		return store.Account{}, errors.New("row has no account IBAN")
@@ -348,7 +427,7 @@ func (r *run) account(ctx context.Context, c Candidate) (store.Account, error) {
 	}
 
 	if r.opts.Cutover != "" && r.opts.Cutover != a.CutoverDate {
-		if err := r.checkCutover(ctx, a); err != nil {
+		if err := checkCutover(ctx, r.tx, a, r.opts.Cutover, r.parser.Source()); err != nil {
 			return store.Account{}, err
 		}
 		if err := r.tx.SetCutover(ctx, a.ID, r.opts.Cutover); err != nil {
@@ -356,8 +435,52 @@ func (r *run) account(ctx context.Context, c Candidate) (store.Account, error) {
 		}
 		a.CutoverDate = r.opts.Cutover
 	}
+	if err := r.checkSourceMix(ctx, a); err != nil {
+		return store.Account{}, err
+	}
 	r.accounts[iban] = a
 	return a, nil
+}
+
+// checkSourceMix refuses to add a second source to an account that has no
+// cut-over date: nothing would say which source owns which days, and the same
+// transactions would be imported from both.
+func (r *run) checkSourceMix(ctx context.Context, a store.Account) error {
+	if a.CutoverDate != "" {
+		return nil
+	}
+	other, err := r.tx.EarliestBookingDateOtherSources(ctx, a.ID, r.parser.Source())
+	if err != nil {
+		return err
+	}
+	if other != "" {
+		return fmt.Errorf("account %s already has transactions from another source and no cut-over date; set one first with: budgeteer account set-cutover --slug %s --date YYYY-MM-DD",
+			a.Slug, a.Slug)
+	}
+	return nil
+}
+
+// SetCutover sets the cut-over date of an account by hand: the history source
+// (the one importing rows up to the date) keeps everything up to and
+// including it, every other source everything after. It is refused if
+// existing transactions would end up on the wrong side.
+func SetCutover(ctx context.Context, st *store.Store, accountSlug, date, historySource string) error {
+	if _, err := time.Parse(time.DateOnly, date); err != nil {
+		return fmt.Errorf("invalid cut-over date %q: want YYYY-MM-DD", date)
+	}
+	return st.InTx(ctx, func(tx *store.Store) error {
+		a, err := tx.AccountBySlug(ctx, accountSlug)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("account %q does not exist", accountSlug)
+		}
+		if err != nil {
+			return err
+		}
+		if err := checkCutover(ctx, tx, a, date, historySource); err != nil {
+			return err
+		}
+		return tx.SetCutover(ctx, a.ID, date)
+	})
 }
 
 func (r *run) createAccount(ctx context.Context, iban, name string) (store.Account, error) {
@@ -389,9 +512,8 @@ func (r *run) createAccount(ctx context.Context, iban, name string) (store.Accou
 
 // checkCutover rejects a new cut-over date that would leave a day covered by
 // two sources, because the same transaction would then exist twice.
-func (r *run) checkCutover(ctx context.Context, a store.Account) error {
-	cutover := r.opts.Cutover
-	other, err := r.tx.EarliestBookingDateOtherSources(ctx, a.ID, r.parser.Source())
+func checkCutover(ctx context.Context, tx *store.Store, a store.Account, cutover, historySource string) error {
+	other, err := tx.EarliestBookingDateOtherSources(ctx, a.ID, historySource)
 	if err != nil {
 		return err
 	}
@@ -399,13 +521,13 @@ func (r *run) checkCutover(ctx context.Context, a store.Account) error {
 		return fmt.Errorf("cut-over %s rejected: account %s already has transactions from another source since %s; choose a date before that",
 			cutover, a.Slug, other)
 	}
-	latest, err := r.tx.LatestBookingDate(ctx, a.ID, r.parser.Source())
+	latest, err := tx.LatestBookingDate(ctx, a.ID, historySource)
 	if err != nil {
 		return err
 	}
 	if latest > cutover {
 		return fmt.Errorf("cut-over %s rejected: account %s already has %s transactions up to %s; choose that date or a later one",
-			cutover, a.Slug, r.parser.Source(), latest)
+			cutover, a.Slug, historySource, latest)
 	}
 	return nil
 }
