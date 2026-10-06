@@ -48,15 +48,6 @@ func (s *Store) EnsureCategory(ctx context.Context, slug, name string, parentID 
 	return id, true, err
 }
 
-func (s *Store) SetCategoryExcludedFromIncome(ctx context.Context, categoryID int64, excluded bool) error {
-	_, err := s.q.ExecContext(ctx,
-		`UPDATE categories SET excluded_from_income = ? WHERE id = ?`, excluded, categoryID)
-	if err != nil {
-		return fmt.Errorf("store: update category: %w", err)
-	}
-	return nil
-}
-
 // Allocations returns the allocations of one transaction.
 func (s *Store) Allocations(ctx context.Context, transactionID int64) ([]Allocation, error) {
 	rows, err := s.q.QueryContext(ctx,

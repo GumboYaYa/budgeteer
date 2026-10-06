@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"time"
 
@@ -61,11 +60,15 @@ type Candidate struct {
 	// Tx holds the normalized fields. IDs are filled in by the pipeline.
 	Tx store.Transaction
 
+	// Superseded marks a row that other rows of the same file replace (the
+	// original of a split). It is kept in the raw layer but must not exist as
+	// a transaction.
+	Superseded bool
+
 	// Category as named by the source; both empty means uncategorized.
-	MainCategory       string
-	SubCategory        string
-	ExcludedFromIncome bool
-	Tags               []string
+	MainCategory string
+	SubCategory  string
+	Tags         []string
 }
 
 type Options struct {
@@ -74,6 +77,10 @@ type Options struct {
 	// Cutover (YYYY-MM-DD), if set, becomes the cut-over date of every account
 	// in the file before the rows are filtered.
 	Cutover string
+	// Force processes a file again even if the identical file was imported
+	// before, and overwrites the source fields of transactions that already
+	// exist. Data set by hand (category, transfer flag) is still kept.
+	Force bool
 }
 
 // Summary reports what an import did.
@@ -83,10 +90,12 @@ type Summary struct {
 	New               int  // transactions inserted
 	Duplicates        int  // rows whose transaction already existed
 	Updated           int  // existing transactions whose category was refreshed
+	FieldsUpdated     int  // existing transactions whose details were overwritten (Force)
 	SkippedCutover    int  // rows on the other side of the cut-over date
+	SkippedSuperseded int  // rows replaced by other rows of the file (split originals)
+	Removed           int  // existing transactions deleted because they are now superseded
 	AccountsCreated   []string
 	CategoriesCreated int
-	Warnings          []string
 }
 
 // Run imports one file. It is idempotent: the identical file is recognised by
@@ -106,11 +115,11 @@ func Run(ctx context.Context, st *store.Store, p Parser, file io.Reader, fileNam
 	hash := hex.EncodeToString(sum[:])
 	fileName = filepath.Base(fileName)
 
-	exists, err := st.ImportExists(ctx, hash)
+	importID, err := st.ImportIDBySHA256(ctx, hash)
 	if err != nil {
 		return Summary{}, err
 	}
-	if exists {
+	if importID != 0 && !opts.Force {
 		return Summary{AlreadyImported: true}, nil
 	}
 
@@ -125,7 +134,7 @@ func Run(ctx context.Context, st *store.Store, p Parser, file io.Reader, fileNam
 
 	var summary Summary
 	err = st.InTx(ctx, func(tx *store.Store) error {
-		run := &run{tx: tx, parser: p, opts: opts, summary: Summary{Rows: len(rows)}}
+		run := &run{tx: tx, parser: p, opts: opts, importID: importID, summary: Summary{Rows: len(rows)}}
 		if err := run.importAll(ctx, fileName, hash, candidates); err != nil {
 			return err
 		}
@@ -165,25 +174,21 @@ type run struct {
 	importID   int64
 	accounts   map[string]store.Account // by normalized IBAN
 	categories map[string]int64         // by slug
-	excluded   map[int64]*tally         // by category id
-	names      map[int64]string         // category id → slug, for warnings
 }
-
-// tally counts how many rows of a category are excluded from income.
-type tally struct{ excluded, total int }
 
 func (r *run) importAll(ctx context.Context, fileName, hash string, candidates []Candidate) error {
 	r.accounts = make(map[string]store.Account)
 	r.categories = make(map[string]int64)
-	r.excluded = make(map[int64]*tally)
-	r.names = make(map[int64]string)
 
 	var err error
-	r.importID, err = r.tx.CreateImport(ctx, store.Import{
-		Source: r.parser.Source(), FileName: fileName, SHA256: hash, RowCount: r.summary.Rows,
-	})
-	if err != nil {
-		return err
+	// importID is already set when an identical file is processed again.
+	if r.importID == 0 {
+		r.importID, err = r.tx.CreateImport(ctx, store.Import{
+			Source: r.parser.Source(), FileName: fileName, SHA256: hash, RowCount: r.summary.Rows,
+		})
+		if err != nil {
+			return err
+		}
 	}
 	known, err := r.tx.TransactionIDsByDedupKey(ctx, r.parser.Source())
 	if err != nil {
@@ -204,6 +209,22 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			continue
 		}
 
+		if c.Superseded {
+			if _, err := r.storeRaw(ctx, c.Row); err != nil {
+				return err
+			}
+			r.summary.SkippedSuperseded++
+			// The row was imported as a transaction before it was split.
+			if txID, ok := known[c.Tx.DedupKey]; ok {
+				if err := r.tx.DeleteTransaction(ctx, txID); err != nil {
+					return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
+				}
+				delete(known, c.Tx.DedupKey)
+				r.summary.Removed++
+			}
+			continue
+		}
+
 		categoryID, err := r.category(ctx, c)
 		if err != nil {
 			return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
@@ -211,6 +232,16 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 
 		if txID, ok := known[c.Tx.DedupKey]; ok {
 			r.summary.Duplicates++
+			if r.opts.Force {
+				if err := r.refreshFields(ctx, txID, account.ID, c.Tx); err != nil {
+					return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
+				}
+				for _, tag := range c.Tags {
+					if err := r.tx.TagTransaction(ctx, txID, tag); err != nil {
+						return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
+					}
+				}
+			}
 			if err := r.refreshCategory(ctx, txID, c.Tx.AmountCents, categoryID); err != nil {
 				return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
 			}
@@ -243,8 +274,7 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			}
 		}
 	}
-
-	return r.applyExcludedFromIncome(ctx)
+	return nil
 }
 
 // ownsDate reports whether this source is responsible for a booking date,
@@ -266,7 +296,7 @@ func (r *run) storeRaw(ctx context.Context, row RawRow) (int64, error) {
 	if err := enc.Encode(row.Fields); err != nil {
 		return 0, fmt.Errorf("line %d: %w", row.LineNo, err)
 	}
-	return r.tx.InsertRawRecord(ctx, r.importID, row.LineNo, string(bytes.TrimSpace(buf.Bytes())))
+	return r.tx.PutRawRecord(ctx, r.importID, row.LineNo, string(bytes.TrimSpace(buf.Bytes())))
 }
 
 // account finds the candidate's account by IBAN or creates it, and applies a
@@ -352,8 +382,7 @@ func (r *run) checkCutover(ctx context.Context, a store.Account) error {
 }
 
 // category returns the id of the candidate's category (0 if uncategorized),
-// creating the main and sub category as needed, and records the row's
-// excluded-from-income flag for the majority vote.
+// creating the main and sub category as needed.
 func (r *run) category(ctx context.Context, c Candidate) (int64, error) {
 	main, sub := c.MainCategory, c.SubCategory
 	if main == "" {
@@ -371,8 +400,6 @@ func (r *run) category(ctx context.Context, c Candidate) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	r.vote(id, c.ExcludedFromIncome)
-
 	if sub != "" {
 		subSlug := slug.Make(sub)
 		if subSlug == "" {
@@ -381,7 +408,6 @@ func (r *run) category(ctx context.Context, c Candidate) (int64, error) {
 		if id, err = r.ensureCategory(ctx, mainSlug+"/"+subSlug, sub, id); err != nil {
 			return 0, err
 		}
-		r.vote(id, c.ExcludedFromIncome)
 	}
 	return id, nil
 }
@@ -398,20 +424,35 @@ func (r *run) ensureCategory(ctx context.Context, slug, name string, parentID in
 		r.summary.CategoriesCreated++
 	}
 	r.categories[slug] = id
-	r.names[id] = slug
 	return id, nil
 }
 
-func (r *run) vote(categoryID int64, excluded bool) {
-	t := r.excluded[categoryID]
-	if t == nil {
-		t = &tally{}
-		r.excluded[categoryID] = t
+// refreshFields overwrites the source fields of an existing transaction with
+// those of the file. A transfer flag that was set by hand is kept.
+func (r *run) refreshFields(ctx context.Context, txID, accountID int64, from store.Transaction) error {
+	current, err := r.tx.TransactionByID(ctx, txID)
+	if err != nil {
+		return err
 	}
-	t.total++
-	if excluded {
-		t.excluded++
+	want := from
+	want.ID, want.RawRecordID = current.ID, current.RawRecordID
+	want.Source, want.DedupKey = current.Source, current.DedupKey
+	want.AccountID = accountID
+	want.TransferManual = current.TransferManual
+	if current.TransferManual {
+		want.IsTransfer = current.IsTransfer
 	}
+	if want.Currency == "" {
+		want.Currency = "EUR"
+	}
+	if want == current {
+		return nil
+	}
+	if err := r.tx.UpdateTransaction(ctx, want); err != nil {
+		return err
+	}
+	r.summary.FieldsUpdated++
+	return nil
 }
 
 // refreshCategory brings an existing transaction's category in line with the
@@ -439,34 +480,5 @@ func (r *run) refreshCategory(ctx context.Context, txID, amountCents, categoryID
 		return err
 	}
 	r.summary.Updated++
-	return nil
-}
-
-// applyExcludedFromIncome sets each category's flag by majority of its rows
-// in this file. The source has the flag per row, the schema per category;
-// categories whose rows disagree are reported.
-func (r *run) applyExcludedFromIncome(ctx context.Context) error {
-	ids := make([]int64, 0, len(r.excluded))
-	for id := range r.excluded {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return r.names[ids[i]] < r.names[ids[j]] })
-
-	for _, id := range ids {
-		t := r.excluded[id]
-		excluded := t.excluded*2 > t.total
-		if err := r.tx.SetCategoryExcludedFromIncome(ctx, id, excluded); err != nil {
-			return err
-		}
-		if t.excluded != 0 && t.excluded != t.total {
-			state := "counted as income/spending"
-			if excluded {
-				state = "excluded from income"
-			}
-			r.summary.Warnings = append(r.summary.Warnings, fmt.Sprintf(
-				"category %s: %d of %d rows are marked as excluded from income; category is %s",
-				r.names[id], t.excluded, t.total, state))
-		}
-	}
 	return nil
 }

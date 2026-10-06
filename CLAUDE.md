@@ -37,7 +37,7 @@ CLI commands and web handlers are thin wrappers; logic lives in `internal/` so b
 - **SQLite** via `modernc.org/sqlite` (pure Go, no CGO). Every connection uses `journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`.
 - **Migrations** use goose with embedded SQL files, forward-only. Once a migration has been applied to a real database, never edit it; add a new file.
 - **Imports** are idempotent: a file is identified by its SHA-256, a row by its `dedup_key`. An import runs in one DB transaction. Parsers are pure functions without DB access.
-- **Manual categorization is never overwritten** by an import.
+- **Manual work is never overwritten** by an import, not even with `--force`: allocations with `source = 'manual'` and transfer flags with `is_transfer_manual = 1`. Change the transfer flag only through `store.SetTransfer`.
 - **Frontend**: templ + HTMX + DaisyUI, server-rendered. No Node toolchain. Generated `*_templ.go` and built CSS are committed.
 - **Dependencies**: keep them minimal and pure Go. Use the standard library for HTTP routing.
 - **Tests**: table-driven; DB tests run against a temporary database file. Each phase ends with `go test ./...` passing.

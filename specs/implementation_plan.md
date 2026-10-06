@@ -19,7 +19,7 @@ Environment at time of writing: Go 1.27 installed; `templ`, `tailwindcss` not in
 | D5 | DKB dedup key account part | Account **slug**; the occurrence index `n` is counted over `Gebucht` rows only. | Slug survives a DB rebuild (ids do not); a `Vorgemerkt` twin must not shift the index. |
 | D6 | Money parsing | Two explicit functions `ParseDE` / `ParseEN`, chosen by the importer. No format guessing. | `1.234` is ambiguous between the two formats. |
 | D7 | Category rename vs. slug | Rename changes `name` only; `slug` stays. Move and merge do change slugs. | Slug is the stable key for the future `rules.yaml`. |
-| D8 | `excluded_from_income` | Finanzguru has it per row, the schema per category: set the category flag by majority of its rows and print the categories where rows disagree. | Agreed. |
+| D8 | `excluded_from_income` | **Not imported.** `categories.excluded_from_income` stays 0. | The real export shows the Finanzguru flag is not a category property: it equals the transfer flag on every row except the two split originals, and no category is excluded as a whole. `is_transfer` already carries it. |
 | D9 | Transfers in DKB imports | `is_transfer = 1` automatically when the `IBAN` column equals the IBAN of another own account; everything else via `t` in the inbox. | Agreed. DKB has no transfer flag. |
 | D10 | DKB CSV dialect | Comma-separated, UTF-8, RFC 4180 quoting (the file is exported from Google Sheets). The reader also accepts `;` (detected on the header line) and strips a BOM, so a direct DKB download works too. | Costs a few lines, avoids a silent failure later. |
 | D11 | Small CLI addition | `account list`. | Needed to find the slugs of accounts auto-created by the Finanzguru import. |
@@ -29,7 +29,8 @@ Environment at time of writing: Go 1.27 installed; `templ`, `tailwindcss` not in
 | D16 | Repeated Finanzguru imports | Supported. Each export contains all transactions; rows are matched by `Buchungs-ID` (`dedup_key = fg:<id>`). New rows are inserted. For existing rows only the category is refreshed, and only while the allocation still has `source = 'finanzguru'` (or there is none); `manual` allocations are never touched. Amount, text, transfer flag and tags of existing rows are left alone. | Finanzguru stays the source of truth for what was categorized there, without overwriting work done in Budgeteer. |
 | D17 | Moving the cut-over | A later Finanzguru import may pass a later `--cutover`. It is rejected if the account already has bank-CSV transactions on or before the new date. | Otherwise the same transaction would exist once from each source. |
 | D18 | Finanzguru details not covered by the spec | (a) The `Tags` column is split on `,` and `;`, tags are lower-cased. (b) A category that a later export no longer contains is kept, not removed. (c) Two rows with the same `Buchungs-ID` in one file count as one transaction. (d) A cut-over date is also rejected when the account already has Finanzguru transactions after it. (e) Re-importing an identical file changes nothing, including the cut-over date. | (a) is an assumption to verify in 2.3. (d) mirrors D17: otherwise the bank CSV would import those days again. |
-| D15 | Splits | **Not built.** One category per transaction: the importer and the UI always write exactly one allocation for the full amount. The `allocations` table stays as it is. | Splits were never used in Finanzguru and are not wanted. The table is still needed for `source`, and later for rules and suggestions. |
+| D19 | `--force` and the manual transfer marker | `import finanzguru --force` processes a file even if the identical file was imported before (the existing `imports` row and raw records are reused), and overwrites the source fields of existing transactions (dates, amount, texts, references, transfer flag, tags added). Categories set by hand are kept as always. A transfer flag set by hand is kept through `transactions.is_transfer_manual` (migration `0002`), which `store.SetTransfer` sets. Without `--force`, D16 applies unchanged. | Lets an already imported file be reprocessed after the importer improves, without throwing away manual work. |
+| D15 | Splits | **No split feature.** One category per transaction: the importer and the UI always write exactly one allocation for the full amount. The real export contains two old splits. Finanzguru exports a split as the original row (`Split-Typ = Original`) plus parts (`Teilbuchung`, `Restbetrag`) that add up to it; the parts are imported as transactions of their own and the original is left out (raw layer only). The import fails if parts do not add up to their original. A transaction that was imported whole and split later is replaced by its parts. | Matches Finanzguru's own figures exactly, keeps the account total right, and needs no split concept in the app. |
 
 ### Migration tool
 
@@ -115,7 +116,8 @@ Finanzguru stays the only data source until automatic categorization exists; the
 
 - [x] **2.2 Shared helpers.** `slugify` (lowercase, `ä→ae ö→oe ü→ue ß→ss`, non-alphanumerics → `-`, collapse; `Essen & Trinken` → `essen-trinken`), date parser `dd.mm.yyyy` → ISO. Tests.
 
-- [ ] **2.3 Inspect the real Finanzguru export.** Throwaway queries, nothing committed: confirm that `Split-Typ` and `Referenz-Original-ID` are empty everywhere (D15); rows without category; per-category consistency of the "excluded from income" column (D8); number of accounts. With a second export taken later: check that `Buchungs-ID` is stable for the same transaction across exports, including transactions that were still pending in the first one.
+- [x] **2.3 Inspect the real Finanzguru export.** Done on the export of 2026-10-05 (5606 rows, 2 accounts, 2023-08 to 2026-10). Findings: two old splits (D15); "excluded from income" equals the transfer flag (D8); every row has a category; `Tags` holds a single multi-word tag, no separators seen; most card payments use the `VISA Debitkartenumsatz vom …` form; extra columns `Analyse-Vertragsturnus` and `Analyse-Vertrags-ID` stay in the raw layer only.
+- [ ] **2.3b Booking-ID stability.** With a second export taken later: check that `Buchungs-ID` is the same for the same transaction, including transactions that were still pending in the first export. The import summary shows it: "new transactions" must equal the number of genuinely new rows.
 
 - [x] **2.4 Finanzguru importer (`internal/importer/finanzguru`).** Column mapping exactly per spec §4.1. Specifics:
   - Accounts: match by IBAN, else create with `slug = slugify(Name Referenzkonto)`.
@@ -126,8 +128,8 @@ Finanzguru stays the only data source until automatic categorization exists; the
   - `purchase_date`: regex `^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2} Debitk\.` on the purpose.
   - Categories: upsert main (`slug = slugify(main)`) and sub (`main/sub`, `parent_id` set); allocation for the full amount with `source = 'finanzguru'`. Rows without a category get no allocation → inbox.
   - `Analyse-Umbuchung = ja` → `is_transfer = 1`. `Analyse-Vertrag = ja` → tag `vertrag`. `Tags` column → tags.
-  - `excluded_from_income` per D8.
-  - `Split-Typ` / `Referenz-Original-ID` are not interpreted; the import aborts with a clear message if either is non-empty (D15).
+  - Splits per D15.
+  - `purchase_date` is also read from `VISA Debitkartenumsatz vom dd.mm.yyyy`, which is how most card payments appear in the real export.
 
 - [x] **2.5 CLI.** `import finanzguru <file> [--cutover]`; prints the `Summary`.
 
@@ -136,7 +138,7 @@ Finanzguru stays the only data source until automatic categorization exists; the
   - `finanzguru_sample_v2.csv`: the same rows plus new ones, one row with a changed category, one formerly uncategorized row now categorized.
   - Tests: `finanzguru_sample` then `_v2` → only the new rows are added, `raw_records` grows only by those, the changed category is refreshed, a category set by hand in between is kept; same file twice → `AlreadyImported`, row counts unchanged; rows after the cut-over are skipped; a failing row rolls back the whole import.
 
-- [ ] **2.7 Real history import.** Run against the real export, then compare monthly sums per main category with Finanzguru (SQL query documented in the README). Fix discrepancies before moving on.
+- [x] **2.7 Real history import.** Run against the real export, then compare monthly sums per main category with Finanzguru (SQL query documented in the README). Fix discrepancies before moving on.
 
 **Done when:** the real history is imported, a second full export adds only new transactions, and monthly sums match Finanzguru.
 
@@ -145,7 +147,7 @@ Finanzguru stays the only data source until automatic categorization exists; the
 ## Phase 3 — Web UI
 
 - [ ] **3.1 Setup.** `go get -tool github.com/a-h/templ/cmd/templ`; Tailwind standalone CLI + DaisyUI plugin file fetched by a `make tools` target into `./bin/` (ignored); HTMX and Chart.js vendored under `internal/web/static/`. `serve [--addr localhost:8080]`: stdlib mux, embedded static files, base layout with navigation. The app has no auth, so the mux is wrapped in `http.CrossOriginProtection` to stop other websites open in the browser from posting to it.
-- [ ] **3.2 Store functions for the UI.** Inbox page (view `uncategorized` + account), `SetCategory(txID, categoryID)`, `SetTransfer(txID, bool)`. `SetCategory` replaces the transaction's allocations with one `manual` allocation for the full amount, in one DB transaction. Transaction search (account, date range, category, text; paginated), month aggregates, category tree.
+- [ ] **3.2 Store functions for the UI.** Inbox page (view `uncategorized` + account), `SetCategory(txID, categoryID)`, `SetTransfer(txID, bool)` (exists since D19; it also sets the manual marker). `SetCategory` replaces the transaction's allocations with one `manual` allocation for the full amount, in one DB transaction. Transaction search (account, date range, category, text; paginated), month aggregates, category tree.
 - [ ] **3.3 Inbox (`/inbox`) — manual categorization, keyboard only.** Rows newest first: date, account, counterparty, purpose, amount. HTMX posts return an empty row (swap out) and focus moves to the next row.
   - `j` / `k` move focus.
   - `c` or `Enter` opens the category picker: fuzzy search over `name` + `slug`, client-side over the full list (it is small); the most recently used categories are listed first; `Enter` confirms.

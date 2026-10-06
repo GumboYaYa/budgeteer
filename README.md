@@ -28,7 +28,7 @@ Planned for later: a DKB CSV importer, and automatic categorization through rule
 budgeteer migrate
 budgeteer account add --slug <slug> --name <name> [--iban <iban>] [--bank dkb]
 budgeteer account list
-budgeteer import finanzguru <file> [--cutover YYYY-MM-DD]
+budgeteer import finanzguru <file> [--cutover YYYY-MM-DD] [--force]
 budgeteer serve [--addr localhost:8080]
 budgeteer export --format csv|parquet [--out dir]
 budgeteer backup [--out dir]

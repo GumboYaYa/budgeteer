@@ -89,6 +89,7 @@ func (accountListCmd) Run(ctx context.Context, st *store.Store) error {
 type importFinanzguruCmd struct {
 	File    string `arg:"" type:"existingfile" help:"CSV export from Finanzguru."`
 	Cutover string `placeholder:"YYYY-MM-DD" help:"Import only transactions up to this date and store it as the cut-over date of the accounts in the file."`
+	Force   bool   `help:"Process the file even if it was imported before, and overwrite the details of existing transactions with those in the file. Categories and transfer flags set by hand are kept."`
 }
 
 func (c importFinanzguruCmd) Run(ctx context.Context, st *store.Store, db dbPath) error {
@@ -101,6 +102,7 @@ func (c importFinanzguruCmd) Run(ctx context.Context, st *store.Store, db dbPath
 	summary, err := importer.Run(ctx, st, finanzguru.Parser{}, f, c.File, importer.Options{
 		RawDir:  filepath.Join(filepath.Dir(string(db)), "raw"),
 		Cutover: c.Cutover,
+		Force:   c.Force,
 	})
 	if err != nil {
 		return err
@@ -114,13 +116,16 @@ func (c importFinanzguruCmd) Run(ctx context.Context, st *store.Store, db dbPath
 
 func printSummary(s importer.Summary) {
 	if s.AlreadyImported {
-		fmt.Println("this exact file was imported before; nothing changed")
+		fmt.Println("this exact file was imported before; nothing changed (use --force to process it again)")
 		return
 	}
 	fmt.Printf("rows in file:          %d\n", s.Rows)
 	fmt.Printf("new transactions:      %d\n", s.New)
 	fmt.Printf("already imported:      %d\n", s.Duplicates)
 	fmt.Printf("categories refreshed:  %d\n", s.Updated)
+	if s.FieldsUpdated > 0 {
+		fmt.Printf("details overwritten:   %d\n", s.FieldsUpdated)
+	}
 	if s.SkippedCutover > 0 {
 		fmt.Printf("skipped by cut-over:   %d\n", s.SkippedCutover)
 	}
@@ -130,8 +135,11 @@ func printSummary(s importer.Summary) {
 	if s.CategoriesCreated > 0 {
 		fmt.Printf("categories created:    %d\n", s.CategoriesCreated)
 	}
-	for _, w := range s.Warnings {
-		fmt.Println("warning:", w)
+	if s.SkippedSuperseded > 0 {
+		fmt.Printf("split originals:       %d (their parts are imported instead)\n", s.SkippedSuperseded)
+	}
+	if s.Removed > 0 {
+		fmt.Printf("removed, now split:    %d\n", s.Removed)
 	}
 }
 

@@ -92,9 +92,6 @@ func TestFirstImport(t *testing.T) {
 	if s.CategoriesCreated != 11 {
 		t.Errorf("CategoriesCreated = %d, want 11", s.CategoriesCreated)
 	}
-	if len(s.Warnings) != 0 {
-		t.Errorf("Warnings = %v", s.Warnings)
-	}
 
 	if n := count(t, st, `SELECT count(*) FROM imports WHERE source = 'finanzguru' AND row_count = 8 AND account_id IS NULL`); n != 1 {
 		t.Errorf("imports rows = %d, want 1", n)
@@ -134,8 +131,6 @@ func TestFirstImport(t *testing.T) {
 		{`SELECT p.slug FROM categories c JOIN categories p ON p.id = c.parent_id WHERE c.slug = 'essen-trinken/lebensmittel'`, "essen-trinken"},
 		{`SELECT name FROM categories WHERE slug = 'essen-trinken'`, "Essen & Trinken"},
 		{`SELECT a.amount_cents FROM allocations a JOIN transactions t ON t.id = a.transaction_id WHERE t.external_id = 'fg-0008'`, "-123456"},
-		{`SELECT group_concat(slug) FROM (SELECT slug FROM categories WHERE excluded_from_income = 1 ORDER BY slug)`,
-			"sparen-umbuchungen,sparen-umbuchungen/umbuchung"},
 		// Tags, including the contract tag.
 		{tagsOf("fg-0006"), "geschenk,urlaub-2026"},
 		{tagsOf("fg-0005"), "vertrag"},
@@ -197,10 +192,6 @@ func TestNewerFullExport(t *testing.T) {
 	if len(s.AccountsCreated) != 0 || s.CategoriesCreated != 3 {
 		t.Errorf("AccountsCreated = %v, CategoriesCreated = %d", s.AccountsCreated, s.CategoriesCreated)
 	}
-	// Lebensmittel has one excluded row out of two in this export.
-	if len(s.Warnings) != 2 || !strings.Contains(s.Warnings[0], "essen-trinken: 1 of 2") {
-		t.Errorf("Warnings = %q", s.Warnings)
-	}
 
 	for table, want := range map[string]int{"imports": 2, "raw_records": 10, "transactions": 10, "allocations": 10, "accounts": 2} {
 		if n := count(t, st, `SELECT count(*) FROM `+table); n != want {
@@ -215,7 +206,6 @@ func TestNewerFullExport(t *testing.T) {
 		{categoryOfID("fg-0010"), "essen-trinken/lebensmittel (finanzguru)"},
 		{`SELECT purchase_date FROM transactions WHERE external_id = 'fg-0010'`, "2026-10-01"},
 		{`SELECT count(*) FROM uncategorized`, "0"},
-		{`SELECT excluded_from_income FROM categories WHERE slug = 'essen-trinken/lebensmittel'`, "0"},
 	}
 	for _, c := range checks {
 		if got := text(t, st, c.query); got != c.want {
@@ -341,8 +331,9 @@ func TestBadRowsRollBack(t *testing.T) {
 		{"German amount format", "Betrag", "-12,34", "line 9: Betrag"},
 		{"bad date", "Buchungstag", "2026-09-12", "line 9: Buchungstag"},
 		{"missing booking id", "Buchungs-ID", "", "line 9: Buchungs-ID is empty"},
-		{"split type set", "Split-Typ", "Teil", "split transactions are not supported"},
-		{"split reference set", "Referenz-Original-ID", "fg-0001", "split transactions are not supported"},
+		{"unknown split type", "Split-Typ", "Teil", "line 9: unexpected split columns"},
+		{"split reference without type", "Referenz-Original-ID", "fg-0001", "line 9: unexpected split columns"},
+		{"split original without parts", "Split-Typ", "Original", "line 9: split original of -1234.56 is not covered"},
 		{"bad yes/no", "Analyse-Umbuchung", "vielleicht", "line 9: Analyse-Umbuchung"},
 		// Fails inside the database transaction, after accounts, categories
 		// and seven transactions were written.
@@ -400,12 +391,209 @@ func TestNormalizeDetails(t *testing.T) {
 	if got := purchaseDate("2026-10-03T05:07 Debitk.12 2029-12 SHOP (ECOM)"); got != "2026-10-03" {
 		t.Errorf("purchaseDate = %q", got)
 	}
-	for _, purpose := range []string{"", "Miete 09/2026", "Ref 2026-10-03T05:07 Debitk.", "2026-13-40T05:07 Debitk.12"} {
+	if got := purchaseDate("VISA Debitkartenumsatz vom 03.10.2026"); got != "2026-10-03" {
+		t.Errorf("purchaseDate = %q", got)
+	}
+	for _, purpose := range []string{"", "Miete 09/2026", "VISA Debitkartenumsatz", "VISA Debitkartenumsatz vom 31.02.2026", "Ref 2026-10-03T05:07 Debitk.", "2026-13-40T05:07 Debitk.12"} {
 		if got := purchaseDate(purpose); got != "" {
 			t.Errorf("purchaseDate(%q) = %q, want empty", purpose, got)
 		}
 	}
 	if got := strings.Join(splitTags(" Urlaub-2026; geschenk, ,GESCHENK"), "|"); got != "urlaub-2026|geschenk" {
 		t.Errorf("splitTags = %q", got)
+	}
+}
+
+const (
+	sampleUnsplit = "../../../testdata/finanzguru_unsplit.csv"
+	sampleSplit   = "../../../testdata/finanzguru_split.csv"
+)
+
+const splitRows = `
+	SELECT group_concat(external_id || ':' || amount_cents || ':' || is_transfer, ' ')
+	FROM (SELECT * FROM transactions WHERE external_id >= 'fg-0020' ORDER BY external_id)`
+
+func TestSplit(t *testing.T) {
+	st := newStore(t)
+	s := mustRun(t, st, sampleSplit, importer.Options{})
+
+	// The original (fg-0020, -34.97) is left out; its three parts are imported.
+	if s.Rows != 6 || s.New != 5 || s.SkippedSuperseded != 1 || s.Removed != 0 {
+		t.Errorf("summary = %+v", s)
+	}
+	if got, want := text(t, st, splitRows), "fg-0021:-1099:1 fg-0022:-899:1 fg-0023:-1499:0"; got != want {
+		t.Errorf("split rows = %s, want %s", got, want)
+	}
+	if got := text(t, st, categoryOfID("fg-0023")); got != "lifestyle/shopping (finanzguru)" {
+		t.Errorf("category of remainder = %s", got)
+	}
+	// The original stays in the raw layer.
+	if n := count(t, st, `SELECT count(*) FROM raw_records WHERE data LIKE '%"Split-Typ":"Original"%'`); n != 1 {
+		t.Errorf("raw record of the split original missing")
+	}
+}
+
+// A transaction that was imported whole and split in Finanzguru afterwards is
+// replaced by its parts.
+func TestSplitAfterImport(t *testing.T) {
+	st := newStore(t)
+	mustRun(t, st, sampleUnsplit, importer.Options{})
+	if got, want := text(t, st, splitRows), "fg-0020:-3497:0"; got != want {
+		t.Fatalf("before split: %s, want %s", got, want)
+	}
+	before := count(t, st, `SELECT sum(amount_cents) FROM transactions`)
+
+	s := mustRun(t, st, sampleSplit, importer.Options{})
+	if s.New != 3 || s.Duplicates != 2 || s.SkippedSuperseded != 1 || s.Removed != 1 {
+		t.Errorf("summary = %+v", s)
+	}
+	if got, want := text(t, st, splitRows), "fg-0021:-1099:1 fg-0022:-899:1 fg-0023:-1499:0"; got != want {
+		t.Errorf("after split: %s, want %s", got, want)
+	}
+	if after := count(t, st, `SELECT sum(amount_cents) FROM transactions`); after != before {
+		t.Errorf("account total changed from %d to %d", before, after)
+	}
+	if n := count(t, st, `SELECT count(*) FROM allocations a LEFT JOIN transactions t ON t.id = a.transaction_id WHERE t.id IS NULL`); n != 0 {
+		t.Errorf("%d allocations left behind by the removed transaction", n)
+	}
+}
+
+func TestSplitMustAddUp(t *testing.T) {
+	content, err := os.ReadFile(sampleSplit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct{ name, old, new, wantErr string }{
+		{"part amount changed", ",-14.99,", ",-15.99,", "is not covered by its parts (3 parts, sum -35.97)"},
+		{"part refers to unknown original", "fg-0023,fg-0020,Restbetrag", "fg-0023,fg-9999,Restbetrag", "which is not a split original in this file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(string(content), tt.old) {
+				t.Fatalf("fixture does not contain %q", tt.old)
+			}
+			broken := strings.Replace(string(content), tt.old, tt.new, 1)
+			st := newStore(t)
+			_, err := importer.Run(context.Background(), st, Parser{}, strings.NewReader(broken), "broken.csv", importer.Options{})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
+			}
+			if n := count(t, st, `SELECT count(*) FROM transactions`); n != 0 {
+				t.Errorf("%d transactions after a failed import", n)
+			}
+		})
+	}
+}
+
+func TestForceIdenticalFile(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	mustRun(t, st, sampleV1, importer.Options{})
+
+	// Simulate an older importer version and edits made by hand.
+	_, err := st.DB.Exec(`UPDATE transactions SET purpose = 'old text', purchase_date = NULL WHERE external_id = 'fg-0002'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.DB.Exec(`
+		UPDATE allocations
+		SET source = 'manual', category_id = (SELECT id FROM categories WHERE slug = 'wohnen/miete')
+		WHERE transaction_id = (SELECT id FROM transactions WHERE external_id = 'fg-0002')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var salaryID, transferID int64
+	if err := st.DB.QueryRow(`SELECT id FROM transactions WHERE external_id = 'fg-0001'`).Scan(&salaryID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB.QueryRow(`SELECT id FROM transactions WHERE external_id = 'fg-0003'`).Scan(&transferID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetTransfer(ctx, salaryID, true); err != nil { // file says nein
+		t.Fatal(err)
+	}
+	if err := st.SetTransfer(ctx, transferID, false); err != nil { // file says ja
+		t.Fatal(err)
+	}
+
+	s := mustRun(t, st, sampleV1, importer.Options{Force: true})
+	if s.AlreadyImported || s.Rows != 8 || s.New != 0 || s.Duplicates != 8 || s.FieldsUpdated != 1 || s.Updated != 0 {
+		t.Errorf("summary = %+v", s)
+	}
+	for table, want := range map[string]int{"imports": 1, "raw_records": 8, "transactions": 8, "allocations": 7} {
+		if n := count(t, st, `SELECT count(*) FROM `+table); n != want {
+			t.Errorf("%s = %d rows, want %d", table, n, want)
+		}
+	}
+	checks := []struct{ query, want string }{
+		{`SELECT purpose || '|' || purchase_date FROM transactions WHERE external_id = 'fg-0002'`,
+			"2026-09-01T18:07 Debitk.12 2029-12 ALDI SUED (POS)|2026-09-01"},
+		{categoryOfID("fg-0002"), "wohnen/miete (manual)"},
+		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0001'`, "1|1"},
+		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0003'`, "0|1"},
+		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0004'`, "1|0"},
+	}
+	for _, c := range checks {
+		if got := text(t, st, c.query); got != c.want {
+			t.Errorf("%s\n  got  %s\n  want %s", strings.TrimSpace(c.query), got, c.want)
+		}
+	}
+
+	// A second forced run finds nothing left to change.
+	if s := mustRun(t, st, sampleV1, importer.Options{Force: true}); s.FieldsUpdated != 0 || s.Duplicates != 8 {
+		t.Errorf("second forced run: %+v", s)
+	}
+}
+
+func TestForceChangedFile(t *testing.T) {
+	changed := variant(t, "Betrag", "-1300.00") // fg-0008, was -1234.56
+	run := func(st *store.Store, force bool) importer.Summary {
+		s, err := importer.Run(context.Background(), st, Parser{}, bytes.NewReader(changed), "changed.csv", importer.Options{Force: force})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	const amounts = `
+		SELECT t.amount_cents || '|' || a.amount_cents
+		FROM transactions t JOIN allocations a ON a.transaction_id = t.id WHERE t.external_id = 'fg-0008'`
+
+	t.Run("without force existing details are kept", func(t *testing.T) {
+		st := newStore(t)
+		mustRun(t, st, sampleV1, importer.Options{})
+		if s := run(st, false); s.FieldsUpdated != 0 || s.Duplicates != 8 {
+			t.Errorf("summary = %+v", s)
+		}
+		if got := text(t, st, amounts); got != "-123456|-123456" {
+			t.Errorf("amounts = %s", got)
+		}
+	})
+
+	t.Run("with force the amount and its allocation follow the file", func(t *testing.T) {
+		st := newStore(t)
+		mustRun(t, st, sampleV1, importer.Options{})
+		if s := run(st, true); s.FieldsUpdated != 1 || s.Duplicates != 8 || s.New != 0 {
+			t.Errorf("summary = %+v", s)
+		}
+		if got := text(t, st, amounts); got != "-130000|-130000" {
+			t.Errorf("amounts = %s", got)
+		}
+		if got := text(t, st, `SELECT group_concat(external_id) FROM uncategorized`); got != "fg-0007" {
+			t.Errorf("uncategorized = %s, want only fg-0007", got)
+		}
+	})
+}
+
+// Rows filtered by the cut-over are in the raw layer already when the same
+// file is processed again.
+func TestForceWithCutover(t *testing.T) {
+	st := newStore(t)
+	mustRun(t, st, sampleV1, importer.Options{Cutover: "2026-09-05"})
+	s := mustRun(t, st, sampleV1, importer.Options{Force: true})
+	if s.New != 0 || s.Duplicates != 5 || s.SkippedCutover != 3 {
+		t.Errorf("summary = %+v", s)
+	}
+	if n := count(t, st, `SELECT count(*) FROM raw_records`); n != 8 {
+		t.Errorf("raw_records = %d, want 8", n)
 	}
 }
