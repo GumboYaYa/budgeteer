@@ -16,6 +16,7 @@ import (
 
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/money"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
 
@@ -126,6 +127,7 @@ func TestPagesRender(t *testing.T) {
 			"/transactions":                       "Transactions",
 			"/transactions?q=aldi&status=&page=1": "Transactions",
 			"/categories":                         "Categories",
+			"/reserve":                            "Reserve account",
 			"/import":                             "Finanzguru export",
 			"/static/app.js":                      "tx-row",
 			"/static/app.css":                     "tx-focus",
@@ -312,6 +314,81 @@ func TestTransferAndUndo(t *testing.T) {
 	if strings.Contains(body, "data-transfer") || strings.Contains(body, ">Transfer<") {
 		t.Errorf("row still shown as transfer: %s", body)
 	}
+}
+
+func TestReserve(t *testing.T) {
+	e := newEnv(t, true)
+	rent, radio, unknown := e.txID("fg-0008"), e.txID("fg-0005"), e.txID("fg-0007")
+	marked := `SELECT COALESCE(group_concat(external_id), '') FROM (SELECT external_id FROM transactions WHERE is_reserve = 1 ORDER BY external_id)`
+	contains := func(body string, wants ...string) {
+		t.Helper()
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("page lacks %q", want)
+			}
+		}
+	}
+
+	_, body := e.get("/reserve")
+	contains(body, "No irregular expenses marked", "nothing marked yet", "no reserve account chosen")
+
+	// Marking keeps the rows in place, so the inbox gets them back as well.
+	status, body, _ := e.post("/api/reserve", url.Values{"ids": {rent, radio, unknown}, "value": {"1"}, "view": {"inbox"}})
+	if status != http.StatusOK || strings.Count(body, "data-reserve") != 3 || strings.Contains(body, "Uncategorized") {
+		t.Fatalf("mark: status %d, body %s", status, body)
+	}
+	if got := e.text(`SELECT count(*) FROM uncategorized`); got != "1" {
+		t.Errorf("uncategorized = %s, want 1: marking must not categorize", got)
+	}
+	// Unmarking from the list returns the row without the badge.
+	status, body, _ = e.post("/api/reserve", url.Values{"ids": {unknown}, "value": {"0"}, "view": {"list"}})
+	if status != http.StatusOK || strings.Contains(body, "data-reserve") || !strings.Contains(body, "Uncategorized") {
+		t.Errorf("unmark: status %d, body %s", status, body)
+	}
+	// A failed batch changes nothing.
+	if status, _, _ := e.post("/api/reserve", url.Values{"ids": {unknown, "99999"}, "value": {"1"}}); status != http.StatusNotFound {
+		t.Errorf("unknown transaction: status %d, want 404", status)
+	}
+	if status, _, _ := e.post("/api/reserve", url.Values{"value": {"1"}}); status != http.StatusBadRequest {
+		t.Errorf("no ids: status %d, want 400", status)
+	}
+	if got := e.text(marked); got != "fg-0005,fg-0008" {
+		t.Errorf("marked = %s", got)
+	}
+	_, body = e.get("/transactions?status=reserve", "HX-Request", "true", "HX-Target", "results")
+	if got := strings.Count(body, `class="tx-row"`); got != 2 {
+		t.Errorf("status=reserve lists %d rows, want 2", got)
+	}
+
+	// Both bills (1234.56 + 18.36) were paid this month and are due in a
+	// year: a twelfth each month, rounded up.
+	_, body = e.get("/reserve")
+	contains(body, "the newest imported transaction", "12.09.2026", "Hausverwaltung Beispiel", "12.09.2027", "05.09.2027",
+		money.FormatDE(125292), money.FormatDE(10441), "a twelfth of the bills of a year", "no reserve account chosen", "on target")
+
+	// The balance of the reserve account counts as saved.
+	status, body, _ = e.post("/reserve/account", url.Values{"account": {"gemeinschaftskonto"}})
+	if status != http.StatusOK {
+		t.Fatalf("choose account: status %d", status)
+	}
+	contains(body, "Gemeinschaftskonto on 12.09.2026", money.FormatDE(124001)+" ahead")
+	e.post("/reserve/account", url.Values{"account": {"girokonto"}})
+	if got := e.text(`SELECT group_concat(slug) FROM accounts WHERE holds_reserve = 1`); got != "girokonto" {
+		t.Errorf("reserve accounts = %s, want only girokonto", got)
+	}
+	if status, _, _ := e.post("/reserve/account", url.Values{"account": {"nope"}}); status != http.StatusNotFound {
+		t.Errorf("unknown account: status %d, want 404", status)
+	}
+
+	// Had the rent been paid on 20.10. last year, it would be due before the
+	// next transfer but one: without savings the whole amount is needed now.
+	_, body, _ = e.post("/reserve/account", url.Values{"account": {""}})
+	contains(body, "no reserve account chosen")
+	if _, err := e.st.DB.Exec(`UPDATE transactions SET booking_date = '2025-10-20' WHERE id = ?`, rent); err != nil {
+		t.Fatal(err)
+	}
+	_, body = e.get("/reserve")
+	contains(body, "20.10.2026", "this month, to cover the next bill", money.FormatDE(123456), money.FormatDE(113168)+" behind", "The reserve is behind")
 }
 
 func upload(e *env, path string, fields map[string]string) (int, string) {

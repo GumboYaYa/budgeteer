@@ -45,7 +45,7 @@ const transactionsFlat = `
 	       COALESCE(p.name, c.name) AS main_category,
 	       CASE WHEN p.id IS NOT NULL THEN c.name END AS sub_category,
 	       c.slug AS category_slug, al.source AS category_source,
-	       t.is_transfer,
+	       t.is_transfer, t.is_reserve,
 	       (SELECT group_concat(name, ';') FROM (
 	            SELECT g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id
 	            WHERE tt.transaction_id = t.id ORDER BY g.name)) AS tags,
@@ -59,7 +59,7 @@ const transactionsFlat = `
 	ORDER BY t.booking_date, t.id`
 
 var transactionsFlatKinds = map[string]Kind{
-	"id": KindInt, "amount": KindCents, "amount_cents": KindInt, "is_transfer": KindInt,
+	"id": KindInt, "amount": KindCents, "amount_cents": KindInt, "is_transfer": KindInt, "is_reserve": KindInt,
 }
 
 // ExportDatasets reads every table plus the flat transaction list, all from

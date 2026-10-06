@@ -7,9 +7,10 @@ import (
 )
 
 // txRow is one transaction line. The script in app.js works on these rows:
-// it reads data-id and data-transfer and moves focus between them.
+// it reads data-id, data-transfer and data-reserve and moves focus between
+// them.
 templ txRow(v store.TxView, withCategory bool) {
-	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-transfer?={ v.IsTransfer }>
+	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-transfer?={ v.IsTransfer } data-reserve?={ v.IsReserve }>
 		<td class="w-8"><input type="checkbox" class="checkbox checkbox-xs tx-check" tabindex="-1" aria-label="Select transaction"/></td>
 		<td class="whitespace-nowrap tabular-nums">{ dateDE(v.BookingDate) }</td>
 		<td class="whitespace-nowrap text-base-content/70">{ v.AccountName }</td>
@@ -28,6 +29,9 @@ templ txRow(v store.TxView, withCategory bool) {
 			</td>
 		}
 		<td class="text-right whitespace-nowrap tabular-nums font-medium">
+			if v.IsReserve {
+				<span class="badge badge-sm badge-info badge-soft mr-2 font-normal" title="Irregular expense, covered by the reserve">Reserve</span>
+			}
 			if v.AmountCents > 0 {
 				<span class="text-success">+{ money.FormatDE(v.AmountCents) }</span>
 			} else {
@@ -108,6 +112,7 @@ templ keyboardHelp(inbox bool) {
 							Mark or unmark as transfer between own accounts
 						}
 					</td></tr>
+					<tr><td><kbd class="kbd kbd-sm">r</kbd></td><td>Mark or unmark as irregular expense for the <a class="link" href="/reserve">reserve</a></td></tr>
 					if inbox {
 						<tr><td><kbd class="kbd kbd-sm">u</kbd></td><td>Undo the last action</td></tr>
 					}
@@ -186,6 +191,7 @@ templ listPage(d listData) {
 					<option value="">Any</option>
 					<option value={ store.StatusUncategorized } selected?={ d.Filter.Status == store.StatusUncategorized }>Uncategorized</option>
 					<option value={ store.StatusTransfer } selected?={ d.Filter.Status == store.StatusTransfer }>Transfers</option>
+					<option value={ store.StatusReserve } selected?={ d.Filter.Status == store.StatusReserve }>Reserve</option>
 				</select>
 			</label>
 			<label class="flex flex-col gap-1 text-xs">

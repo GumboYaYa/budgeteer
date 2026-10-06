@@ -148,6 +148,56 @@ func TestAccounts(t *testing.T) {
 	}
 }
 
+func TestReserveAccount(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	ids := map[string]int64{}
+	for _, slug := range []string{"giro", "tagesgeld"} {
+		a, err := s.CreateAccount(ctx, Account{Slug: slug, Name: slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[slug] = a.ID
+	}
+	holders := func() string {
+		t.Helper()
+		list, err := s.ListAccounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out string
+		for _, a := range list {
+			if a.HoldsReserve {
+				out += a.Slug + " "
+			}
+		}
+		return out
+	}
+
+	steps := []struct {
+		id      int64
+		wantErr error
+		want    string
+	}{
+		{ids["giro"], nil, "giro "},
+		{ids["tagesgeld"], nil, "tagesgeld "}, // moves, never two
+		{999, ErrNotFound, "tagesgeld "},      // a failed change keeps the old account
+		{0, nil, ""},
+	}
+	for _, step := range steps {
+		if err := s.SetReserveAccount(ctx, step.id); !errors.Is(err, step.wantErr) {
+			t.Errorf("SetReserveAccount(%d) error = %v, want %v", step.id, err, step.wantErr)
+		}
+		if got := holders(); got != step.want {
+			t.Errorf("after SetReserveAccount(%d): holders = %q, want %q", step.id, got, step.want)
+		}
+	}
+
+	if err := s.SetReserve(ctx, 999, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetReserve(unknown) error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateAccountErrors(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

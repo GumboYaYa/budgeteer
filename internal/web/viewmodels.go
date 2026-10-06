@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/GumboYaYa/budgeteer/internal/money"
+	"github.com/GumboYaYa/budgeteer/internal/reserve"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
 
@@ -53,6 +55,50 @@ type categoriesData struct {
 	Mains      []store.Category
 	Error      string
 	Inbox      int
+}
+
+type reserveData struct {
+	reserve.Status
+	Accounts []store.Account
+	Inbox    int
+}
+
+// monthlyNote explains the monthly amount below its figure.
+func (d reserveData) monthlyNote() string {
+	switch {
+	case len(d.Items) == 0:
+		return "nothing marked yet"
+	case d.CatchUpMonths == 0:
+		return "a twelfth of the bills of a year"
+	case d.CatchUpMonths == 1:
+		return "this month, to cover the next bill"
+	default:
+		return "for " + strconv.Itoa(d.CatchUpMonths) + " months, to cover the bills due until then"
+	}
+}
+
+// savedNote says where the saved amount comes from.
+func (d reserveData) savedNote() string {
+	switch {
+	case !d.HasAccount:
+		return "no reserve account chosen"
+	case !d.BalanceKnown:
+		return "balance of " + d.Account.Name + " is not known"
+	default:
+		return d.Account.Name + " on " + dateDE(d.AsOf)
+	}
+}
+
+// targetNote compares the saved amount with the target.
+func (d reserveData) targetNote() string {
+	switch diff := d.SavedCents - d.TargetCents; {
+	case diff > 0:
+		return money.FormatDE(diff) + " ahead"
+	case diff < 0:
+		return money.FormatDE(-diff) + " behind"
+	default:
+		return "on target"
+	}
 }
 
 // chartData is handed to the browser as JSON. Values are euros and for

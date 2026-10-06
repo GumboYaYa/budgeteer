@@ -10,6 +10,7 @@ import (
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/reserve"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
 
@@ -224,16 +225,21 @@ func (s *server) respondRows(w http.ResponseWriter, r *http.Request, txIDs []int
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.renderRows(w, r, txIDs, true)
+}
+
+// renderRows answers with the current markup of the given transactions.
+func (s *server) renderRows(w http.ResponseWriter, r *http.Request, txIDs []int64, withCategory bool) {
 	rows := make([]store.TxView, 0, len(txIDs))
 	for _, id := range txIDs {
-		v, err := s.st.TxViewByID(ctx, id)
+		v, err := s.st.TxViewByID(r.Context(), id)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 		rows = append(rows, v)
 	}
-	s.render(w, r, txRows(rows, true))
+	s.render(w, r, txRows(rows, withCategory))
 }
 
 func (s *server) categorize(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +322,72 @@ func (s *server) undo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondRows(w, r, txIDs)
+}
+
+// reserveMark marks or unmarks transactions as irregular expenses. The rows
+// stay where they are, also in the inbox, so the fresh rows are sent back for
+// both views.
+func (s *server) reserveMark(w http.ResponseWriter, r *http.Request) {
+	txIDs, err := ids(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	value := r.PostFormValue("value") == "1"
+	err = s.st.InTx(r.Context(), func(tx *store.Store) error {
+		for _, id := range txIDs {
+			if err := tx.SetReserve(r.Context(), id, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.renderRows(w, r, txIDs, r.PostFormValue("view") == "list")
+}
+
+// --- reserve ----------------------------------------------------------------
+
+func (s *server) reservePage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var d reserveData
+	var err error
+	if d.Status, err = reserve.Load(ctx, s.st); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if d.Accounts, err = s.st.ListAccounts(ctx); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if d.Inbox, err = s.st.CountUncategorized(ctx); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, reservePage(d))
+}
+
+// reserveAccount chooses the account that holds the reserve; an empty slug
+// means none.
+func (s *server) reserveAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var id int64
+	if slug := r.PostFormValue("account"); slug != "" {
+		a, err := s.st.AccountBySlug(ctx, slug)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		id = a.ID
+	}
+	if err := s.st.SetReserveAccount(ctx, id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/reserve", http.StatusSeeOther)
 }
 
 // --- import -----------------------------------------------------------------

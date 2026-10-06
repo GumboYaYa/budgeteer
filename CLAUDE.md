@@ -59,4 +59,4 @@ make css        # tailwind build, after changing classes or assets/app.css
 
 ## Git
 
-Development happens on `go-rewrite`; `master` still holds the old Django project.
+`master` holds the Go project (the `go-rewrite` branch was merged and deleted). Work on a new feature branch off `master`.

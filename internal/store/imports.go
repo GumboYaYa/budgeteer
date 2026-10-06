@@ -176,6 +176,19 @@ func (s *Store) SetTransfer(ctx context.Context, id int64, transfer bool) error 
 	return nil
 }
 
+// SetReserve marks or unmarks a transaction as an irregular expense that the
+// reserve has to cover. Imports never change the mark.
+func (s *Store) SetReserve(ctx context.Context, id int64, reserve bool) error {
+	res, err := s.q.ExecContext(ctx, `UPDATE transactions SET is_reserve = ? WHERE id = ?`, reserve, id)
+	if err != nil {
+		return fmt.Errorf("store: set reserve: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteTransaction removes a transaction with its allocations and tags. Its
 // raw record is kept.
 func (s *Store) DeleteTransaction(ctx context.Context, id int64) error {

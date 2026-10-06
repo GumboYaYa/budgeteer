@@ -23,11 +23,14 @@ type Account struct {
 	// BalanceDate means no balance is known.
 	BalanceCents int64
 	BalanceDate  string
+	// HoldsReserve marks the account the reserve for irregular expenses is
+	// saved on. At most one account has it.
+	HoldsReserve bool
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-const accountColumns = "id, slug, name, iban, bank, currency, cutover_date, balance_cents, balance_date"
+const accountColumns = "id, slug, name, iban, bank, currency, cutover_date, balance_cents, balance_date, holds_reserve"
 
 // NormalizeIBAN removes whitespace and upper-cases, so that IBANs compare
 // equal regardless of how a source formats them.
@@ -122,6 +125,28 @@ func (s *Store) SetBalance(ctx context.Context, accountID, cents int64, date str
 	return nil
 }
 
+// SetReserveAccount makes the account the one that holds the reserve for
+// irregular expenses; any other account loses the mark. accountID 0 means no
+// account holds it.
+func (s *Store) SetReserveAccount(ctx context.Context, accountID int64) error {
+	return s.atomic(ctx, func(tx *Store) error {
+		if _, err := tx.q.ExecContext(ctx, `UPDATE accounts SET holds_reserve = 0 WHERE holds_reserve = 1`); err != nil {
+			return fmt.Errorf("store: set reserve account: %w", err)
+		}
+		if accountID == 0 {
+			return nil
+		}
+		res, err := tx.q.ExecContext(ctx, `UPDATE accounts SET holds_reserve = 1 WHERE id = ?`, accountID)
+		if err != nil {
+			return fmt.Errorf("store: set reserve account: %w", err)
+		}
+		if n, err := res.RowsAffected(); err == nil && n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
 // AccountBalance is the balance of an account at the end of a day.
 type AccountBalance struct {
 	Slug  string
@@ -166,7 +191,7 @@ func scanAccount(row scanner) (Account, error) {
 	var a Account
 	var iban, bank, cutover, balanceDate sql.NullString
 	var balance sql.NullInt64
-	err := row.Scan(&a.ID, &a.Slug, &a.Name, &iban, &bank, &a.Currency, &cutover, &balance, &balanceDate)
+	err := row.Scan(&a.ID, &a.Slug, &a.Name, &iban, &bank, &a.Currency, &cutover, &balance, &balanceDate, &a.HoldsReserve)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrNotFound
 	}

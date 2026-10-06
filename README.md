@@ -9,6 +9,7 @@ A local, single-user personal finance app: import bank transactions, categorize 
 - **Import** a Finanzguru export, as often as needed. Each export contains the full history; only new transactions are added.
 - **Categorize** transactions by hand in an inbox that works entirely from the keyboard.
 - **Analyze** with a monthly overview (income, spending per category) and a filterable transaction list.
+- **Plan a reserve** for bills that come only once or twice a year: mark them, and Budgeteer tells you how much to move to your reserve account each month.
 - **Export** everything as CSV or Parquet, and back up the database with one command.
 
 It also imports DKB account exports, for the time after Finanzguru. Planned for later: automatic categorization through rules and suggestions.
@@ -29,9 +30,11 @@ budgeteer migrate
 budgeteer account add --slug <slug> --name <name> [--iban <iban>] [--bank dkb]
 budgeteer account list
 budgeteer account set-cutover --slug <slug> --date YYYY-MM-DD
+budgeteer account set-reserve --slug <slug> | --none
 budgeteer import finanzguru <file> [--cutover YYYY-MM-DD] [--force]
 budgeteer import dkb --account <slug> <file> [--force]
 budgeteer serve [--addr localhost:8080]
+budgeteer reserve
 budgeteer export --format csv|parquet [--out dir]
 budgeteer backup [--out dir]
 ```
@@ -39,6 +42,12 @@ budgeteer backup [--out dir]
 All commands take `--db` (default `./data/budgeteer.db`).
 
 `export` writes to `data/export/` and `backup` to `data/backups/` unless `--out` is given. The file to open in a spreadsheet is `transactions_flat.csv`: one row per transaction with account, category and tags. Its `amount` column uses a dot as decimal separator (`-9.99`); if your spreadsheet expects a comma, use `amount_cents` instead.
+
+## Reserve for irregular expenses
+
+Taxes, insurances and similar bills come once or twice a year. Mark such a transaction with `r` in the inbox or the transaction list. Every bill marked in the past twelve months is expected again one year later with the same amount; a half-yearly bill is simply marked twice.
+
+The Reserve page (and `budgeteer reserve`) shows the amount to move each month. Normally that is a twelfth of the bills of a year. If you choose the account the reserve is saved on, its balance counts as already saved, and the amount rises for as long as a bill would otherwise come due before the money is there. Everything is calculated as of the newest imported transaction.
 
 ## Switching an account from Finanzguru to DKB
 

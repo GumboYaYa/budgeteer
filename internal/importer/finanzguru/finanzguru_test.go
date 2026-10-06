@@ -516,6 +516,9 @@ func TestForceIdenticalFile(t *testing.T) {
 	if err := st.SetTransfer(ctx, transferID, false); err != nil { // file says ja
 		t.Fatal(err)
 	}
+	if err := st.SetReserve(ctx, salaryID, true); err != nil {
+		t.Fatal(err)
+	}
 
 	s := mustRun(t, st, sampleV1, importer.Options{Force: true})
 	if s.AlreadyImported || s.Rows != 8 || s.New != 0 || s.Duplicates != 8 || s.FieldsUpdated != 1 || s.Updated != 0 {
@@ -533,6 +536,7 @@ func TestForceIdenticalFile(t *testing.T) {
 		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0001'`, "1|1"},
 		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0003'`, "0|1"},
 		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0004'`, "1|0"},
+		{`SELECT group_concat(external_id) FROM transactions WHERE is_reserve = 1`, "fg-0001"},
 	}
 	for _, c := range checks {
 		if got := text(t, st, c.query); got != c.want {

@@ -107,13 +107,14 @@
   }
 
   // In the transaction list, rows stay and are replaced by fresh markup.
-  async function replaceRows(response) {
+  async function replaceRows(response, keepSelection) {
     const holder = document.createElement("template");
     holder.innerHTML = "<table><tbody>" + (await response.text()) + "</tbody></table>";
     holder.content.querySelectorAll("tr.tx-row").forEach((fresh) => {
       const old = document.getElementById(fresh.id);
       if (!old) return;
       if (old.classList.contains("tx-focus")) fresh.classList.add("tx-focus");
+      if (keepSelection && old.classList.contains("tx-selected")) setSelected(fresh, true);
       old.replaceWith(fresh);
     });
   }
@@ -140,6 +141,20 @@
     // In the list, the first target decides the direction for all of them.
     const value = view() === "inbox" || targetRows[0].dataset.transfer === undefined ? "1" : "0";
     return act("/api/transfer", { value }, "transfer");
+  }
+
+  // Marks irregular expenses for the reserve. The rows stay in place, in the
+  // inbox too, and keep their selection so they can be categorized next.
+  async function toggleReserve() {
+    const targetRows = targets();
+    if (targetRows.length === 0) return;
+    // The first target decides the direction for all of them.
+    const value = targetRows[0].dataset.reserve === undefined ? "1" : "0";
+    try {
+      await replaceRows(await post("/api/reserve", targetRows, { value }), true);
+    } catch (err) {
+      toast(err.message);
+    }
   }
 
   async function undo() {
@@ -266,6 +281,9 @@
       }
       case "t":
         toggleTransfer();
+        break;
+      case "r":
+        toggleReserve();
         break;
       case "u":
         if (view() === "inbox") undo();

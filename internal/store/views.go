@@ -20,6 +20,7 @@ type TxView struct {
 	Purpose        string
 	AmountCents    int64
 	IsTransfer     bool
+	IsReserve      bool   // irregular expense covered by the reserve
 	CategoryID     int64  // 0 when uncategorized
 	CategoryName   string // "Main / Sub"
 	CategorySource string
@@ -29,6 +30,7 @@ type TxView struct {
 const (
 	StatusUncategorized = "uncategorized"
 	StatusTransfer      = "transfer"
+	StatusReserve       = "reserve"
 )
 
 // TxFilter selects transactions. Zero values mean "no restriction".
@@ -58,7 +60,7 @@ const txViewFrom = `
 
 const txViewColumns = `
 	t.id, t.booking_date, COALESCE(t.purchase_date, ''), ac.slug, ac.name,
-	COALESCE(t.counterparty, ''), COALESCE(t.purpose, ''), t.amount_cents, t.is_transfer,
+	COALESCE(t.counterparty, ''), COALESCE(t.purpose, ''), t.amount_cents, t.is_transfer, t.is_reserve,
 	COALESCE(c.id, 0),
 	CASE WHEN p.id IS NOT NULL THEN p.name || ' / ' || c.name ELSE COALESCE(c.name, '') END,
 	COALESCE(al.source, '')`
@@ -91,6 +93,8 @@ func (f TxFilter) where() (string, []any) {
 		add("t.id IN (SELECT id FROM uncategorized)")
 	case StatusTransfer:
 		add("t.is_transfer = 1")
+	case StatusReserve:
+		add("t.is_reserve = 1")
 	}
 	if len(conds) == 0 {
 		return "", args
@@ -141,7 +145,7 @@ func (s *Store) TxViewByID(ctx context.Context, id int64) (TxView, error) {
 func scanTxView(row scanner) (TxView, error) {
 	var v TxView
 	err := row.Scan(&v.ID, &v.BookingDate, &v.PurchaseDate, &v.AccountSlug, &v.AccountName,
-		&v.Counterparty, &v.Purpose, &v.AmountCents, &v.IsTransfer,
+		&v.Counterparty, &v.Purpose, &v.AmountCents, &v.IsTransfer, &v.IsReserve,
 		&v.CategoryID, &v.CategoryName, &v.CategorySource)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -270,4 +274,26 @@ func (s *Store) MainCategoryTotals(ctx context.Context, from, to string) ([]Cate
 // there are none.
 func (s *Store) LatestDate(ctx context.Context) (string, error) {
 	return s.bookingDate(ctx, `SELECT max(booking_date) FROM transactions`)
+}
+
+// ReserveTransactions returns the transactions marked as irregular expenses
+// with a booking date after from and up to to (YYYY-MM-DD), oldest first.
+func (s *Store) ReserveTransactions(ctx context.Context, from, to string) ([]TxView, error) {
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT`+txViewColumns+txViewFrom+`
+		WHERE t.is_reserve = 1 AND t.booking_date > ? AND t.booking_date <= ?
+		ORDER BY t.booking_date, t.id`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("store: reserve transactions: %w", err)
+	}
+	defer rows.Close()
+	var out []TxView
+	for rows.Next() {
+		v, err := scanTxView(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

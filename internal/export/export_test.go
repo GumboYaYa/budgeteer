@@ -137,6 +137,7 @@ func TestCSV(t *testing.T) {
 		{"fg-0002", "value_date", ""}, // NULL
 		{"fg-0002", "main_category", "Essen & Trinken"},
 		{"fg-0003", "is_transfer", "1"},
+		{"fg-0003", "is_reserve", "0"},
 		{"fg-0005", "counterparty", "Rundfunk ARD, ZDF, DRadio"},
 		{"fg-0006", "tags", "geschenk;urlaub-2026"},
 		{"fg-0006", "purpose", "say \"hi\", twice\nsecond line"},

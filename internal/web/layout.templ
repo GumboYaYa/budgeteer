@@ -24,6 +24,7 @@ templ layout(title, active string, inbox int) {
 						<span id="inbox-count" class={ "badge badge-sm", templ.KV("badge-primary", inbox > 0), templ.KV("badge-ghost", inbox == 0) }>{ strconv.Itoa(inbox) }</span>
 					</a>
 					@navLink("/transactions", "Transactions", active == "transactions")
+					@navLink("/reserve", "Reserve", active == "reserve")
 					@navLink("/categories", "Categories", active == "categories")
 					@navLink("/import", "Import", active == "import")
 				</nav>
