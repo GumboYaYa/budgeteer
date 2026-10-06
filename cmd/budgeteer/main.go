@@ -18,6 +18,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
+	"github.com/GumboYaYa/budgeteer/internal/export"
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
 	"github.com/GumboYaYa/budgeteer/internal/store"
@@ -36,6 +37,8 @@ type cli struct {
 	Import struct {
 		Finanzguru importFinanzguruCmd `cmd:"" help:"Import a Finanzguru export. Can be repeated with newer exports; only new transactions are added."`
 	} `cmd:"" help:"Import transactions from a file."`
+	Export exportCmd `cmd:"" help:"Write all data as CSV or Parquet files."`
+	Backup backupCmd `cmd:"" help:"Write a consistent copy of the database."`
 }
 
 // dbPath is the database location, for commands that keep files next to it.
@@ -154,6 +157,47 @@ func (c importFinanzguruCmd) Run(ctx context.Context, st *store.Store, db dbPath
 	if summary.AlreadyImported && c.Cutover != "" {
 		fmt.Println("the cut-over date was not changed")
 	}
+	return nil
+}
+
+type exportCmd struct {
+	Format string `enum:"csv,parquet" default:"csv" help:"File format: csv or parquet."`
+	Out    string `type:"path" placeholder:"DIR" help:"Directory to write to. Default: export/ next to the database."`
+}
+
+func (c exportCmd) Run(ctx context.Context, st *store.Store, db dbPath) error {
+	dir := c.Out
+	if dir == "" {
+		dir = filepath.Join(filepath.Dir(string(db)), "export")
+	}
+	files, err := export.Run(ctx, st, dir, c.Format)
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, f := range files {
+		fmt.Fprintf(w, "%s\t%d rows\n", f.Path, f.Rows)
+	}
+	return w.Flush()
+}
+
+type backupCmd struct {
+	Out string `type:"path" placeholder:"DIR" help:"Directory to write to. Default: backups/ next to the database."`
+}
+
+func (c backupCmd) Run(ctx context.Context, st *store.Store, db dbPath) error {
+	dir := c.Out
+	if dir == "" {
+		dir = filepath.Join(filepath.Dir(string(db)), "backups")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "budgeteer-"+time.Now().Format("20060102-150405")+".db")
+	if err := st.Backup(ctx, path); err != nil {
+		return err
+	}
+	fmt.Println("backup written and verified:", path)
 	return nil
 }
 

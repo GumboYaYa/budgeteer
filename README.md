@@ -2,7 +2,7 @@
 
 A local, single-user personal finance app: import bank transactions, categorize them, and analyze spending. The data lives in one SQLite file on your machine and can always be exported.
 
-> **Status: early rewrite.** The project is being rebuilt in Go. Importing a Finanzguru export and the web UI (inbox, transactions, overview, categories, import) work; CSV/Parquet export, backup and the DKB importer are not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
+> **Status: early rewrite.** The project is being rebuilt in Go. Importing a Finanzguru export, the web UI (inbox, transactions, overview, categories, import), CSV/Parquet export and backup work; the DKB importer and automatic categorization are not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
 
 ## What it will do
 
@@ -24,8 +24,6 @@ Planned for later: a DKB CSV importer, and automatic categorization through rule
 
 ## Usage
 
-`export` and `backup` are planned and do not exist yet.
-
 ```
 budgeteer migrate
 budgeteer account add --slug <slug> --name <name> [--iban <iban>] [--bank dkb]
@@ -37,6 +35,8 @@ budgeteer backup [--out dir]
 ```
 
 All commands take `--db` (default `./data/budgeteer.db`).
+
+`export` writes to `data/export/` and `backup` to `data/backups/` unless `--out` is given. The file to open in a spreadsheet is `transactions_flat.csv`: one row per transaction with account, category and tags. Its `amount` column uses a dot as decimal separator (`-9.99`); if your spreadsheet expects a comma, use `amount_cents` instead.
 
 ## Querying the database
 
