@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -595,5 +596,90 @@ func TestForceWithCutover(t *testing.T) {
 	}
 	if n := count(t, st, `SELECT count(*) FROM raw_records`); n != 8 {
 		t.Errorf("raw_records = %d, want 8", n)
+	}
+}
+
+func TestAccountBalances(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	mustRun(t, st, sampleV1, importer.Options{})
+
+	balances := func(date string) string {
+		t.Helper()
+		list, err := st.AccountBalances(ctx, date)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parts []string
+		for _, b := range list {
+			parts = append(parts, b.Slug+"="+strconv.FormatInt(b.Cents, 10))
+		}
+		return strings.Join(parts, " ")
+	}
+	anchors := func() string {
+		return text(t, st, `SELECT group_concat(slug || ':' || balance_cents || '@' || balance_date, ' ') FROM (SELECT * FROM accounts ORDER BY slug)`)
+	}
+
+	// The newest row of each account states its balance.
+	if got, want := anchors(), "gemeinschaftskonto:124001@2026-09-10 girokonto:279091@2026-09-12"; got != want {
+		t.Errorf("anchors = %s, want %s", got, want)
+	}
+	tests := []struct{ date, want string }{
+		{"2026-09-30", "gemeinschaftskonto=124001 girokonto=279091"},
+		// Earlier days: later transactions are taken back. These equal the
+		// Kontostand values of the sample on those days.
+		{"2026-09-06", "gemeinschaftskonto=125000 girokonto=406747"},
+		{"2026-09-01", "gemeinschaftskonto=75000 girokonto=460228"},
+		// Before the first transaction: the opening balance.
+		{"2026-08-31", "gemeinschaftskonto=75000 girokonto=210228"},
+	}
+	for _, tt := range tests {
+		if got := balances(tt.date); got != tt.want {
+			t.Errorf("balances on %s = %s, want %s", tt.date, got, tt.want)
+		}
+	}
+
+	// A newer export moves the known balance forward ...
+	mustRun(t, st, sampleV2, importer.Options{})
+	if got, want := anchors(), "gemeinschaftskonto:124001@2026-09-10 girokonto:526781@2026-10-02"; got != want {
+		t.Errorf("anchors after newer export = %s, want %s", got, want)
+	}
+	if got, want := balances("2026-09-30"), "gemeinschaftskonto=124001 girokonto=279091"; got != want {
+		t.Errorf("balances on 2026-09-30 after newer export = %s, want %s", got, want)
+	}
+	// ... and an older one does not move it back.
+	mustRun(t, st, sampleV1, importer.Options{Force: true})
+	if got, want := anchors(), "gemeinschaftskonto:124001@2026-09-10 girokonto:526781@2026-10-02"; got != want {
+		t.Errorf("anchors after older export = %s, want %s", got, want)
+	}
+}
+
+func TestDayEndBalanceNewestFirst(t *testing.T) {
+	row := func(line int, date, balance, ref string) importer.Candidate {
+		return importer.Candidate{
+			Row:         importer.RawRow{LineNo: line, Fields: map[string]string{colBalance: balance, colSplitOriginal: ref}},
+			AccountIBAN: "DE00",
+			Tx:          store.Transaction{BookingDate: date},
+		}
+	}
+	// As Finanzguru exports: newest first, so the first row of a day is its last transaction.
+	candidates := []importer.Candidate{
+		row(2, "2026-09-03", "300.00", ""),
+		row(3, "2026-09-03", "280.00", ""),
+		row(4, "2026-09-02", "999.00", "fg-1"), // split part: ignored
+		row(5, "2026-09-02", "250.00", ""),
+		row(6, "2026-09-01", "", ""), // no balance stated
+	}
+	if err := markDayEndBalances(candidates); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range candidates {
+		if c.HasDayEndBalance {
+			got = append(got, strconv.Itoa(c.Row.LineNo)+":"+strconv.FormatInt(c.DayEndBalance, 10))
+		}
+	}
+	if want := "2:30000 5:25000"; strings.Join(got, " ") != want {
+		t.Errorf("day-end balances = %v, want %s", got, want)
 	}
 }

@@ -4,22 +4,30 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/alecthomas/kong"
 
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
 	"github.com/GumboYaYa/budgeteer/internal/store"
+	"github.com/GumboYaYa/budgeteer/internal/web"
 )
 
 type cli struct {
 	DB string `help:"Path to the SQLite database file." default:"./data/budgeteer.db" type:"path" env:"BUDGETEER_DB"`
 
+	Serve   serveCmd   `cmd:"" help:"Start the web UI."`
 	Migrate migrateCmd `cmd:"" help:"Create or update the database schema."`
 	Account struct {
 		Add  accountAddCmd  `cmd:"" help:"Add one of your own bank accounts."`
@@ -35,6 +43,41 @@ type dbPath string
 
 // migrated lists the migrations applied while opening the database.
 type migrated []string
+
+type serveCmd struct {
+	Addr string `default:"localhost:8080" help:"Address to listen on. Keep it on localhost: the UI has no login."`
+}
+
+func (c serveCmd) Run(ctx context.Context, st *store.Store, db dbPath) error {
+	listener, err := net.Listen("tcp", c.Addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{
+		Handler:           web.New(st, web.Options{RawDir: rawDir(db), Addr: c.Addr}),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdown)
+	}()
+
+	fmt.Printf("Budgeteer is running at http://%s (Ctrl+C to stop)\n", listener.Addr())
+	if err := srv.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// rawDir is where the originals of imported files are kept.
+func rawDir(db dbPath) string {
+	return filepath.Join(filepath.Dir(string(db)), "raw")
+}
 
 type migrateCmd struct{}
 
@@ -100,7 +143,7 @@ func (c importFinanzguruCmd) Run(ctx context.Context, st *store.Store, db dbPath
 	defer f.Close()
 
 	summary, err := importer.Run(ctx, st, finanzguru.Parser{}, f, c.File, importer.Options{
-		RawDir:  filepath.Join(filepath.Dir(string(db)), "raw"),
+		RawDir:  rawDir(db),
 		Cutover: c.Cutover,
 		Force:   c.Force,
 	})

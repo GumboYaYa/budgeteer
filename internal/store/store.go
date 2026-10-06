@@ -83,6 +83,15 @@ func (s *Store) InTx(ctx context.Context, fn func(tx *Store) error) error {
 	return nil
 }
 
+// atomic runs fn in a transaction: the current one if there is one, otherwise
+// a new one.
+func (s *Store) atomic(ctx context.Context, fn func(tx *Store) error) error {
+	if _, inTx := s.q.(*sql.Tx); inTx {
+		return fn(s)
+	}
+	return s.InTx(ctx, fn)
+}
+
 // Migrate applies all pending migrations and returns the file names of those
 // it applied. It is a no-op on an up-to-date database.
 func (s *Store) Migrate(ctx context.Context) ([]string, error) {

@@ -19,11 +19,15 @@ type Account struct {
 	Bank        string
 	Currency    string
 	CutoverDate string // YYYY-MM-DD
+	// BalanceCents is the known balance at the end of BalanceDate; an empty
+	// BalanceDate means no balance is known.
+	BalanceCents int64
+	BalanceDate  string
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-const accountColumns = "id, slug, name, iban, bank, currency, cutover_date"
+const accountColumns = "id, slug, name, iban, bank, currency, cutover_date, balance_cents, balance_date"
 
 // NormalizeIBAN removes whitespace and upper-cases, so that IBANs compare
 // equal regardless of how a source formats them.
@@ -108,14 +112,61 @@ func (s *Store) SetCutover(ctx context.Context, accountID int64, date string) er
 	return nil
 }
 
+// SetBalance records the known balance of an account at the end of a day.
+func (s *Store) SetBalance(ctx context.Context, accountID, cents int64, date string) error {
+	_, err := s.q.ExecContext(ctx,
+		`UPDATE accounts SET balance_cents = ?, balance_date = ? WHERE id = ?`, cents, date, accountID)
+	if err != nil {
+		return fmt.Errorf("store: set balance: %w", err)
+	}
+	return nil
+}
+
+// AccountBalance is the balance of an account at the end of a day.
+type AccountBalance struct {
+	Slug  string
+	Name  string
+	Cents int64
+}
+
+// AccountBalances returns the balance of every account with a known balance
+// at the end of the given day. It starts from the known balance and takes
+// back the transactions booked after that day, or adds those booked since.
+func (s *Store) AccountBalances(ctx context.Context, date string) ([]AccountBalance, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT a.slug, a.name,
+		       a.balance_cents
+		       - COALESCE((SELECT sum(t.amount_cents) FROM transactions t
+		                   WHERE t.account_id = a.id AND t.booking_date > ?1 AND t.booking_date <= a.balance_date), 0)
+		       + COALESCE((SELECT sum(t.amount_cents) FROM transactions t
+		                   WHERE t.account_id = a.id AND t.booking_date > a.balance_date AND t.booking_date <= ?1), 0)
+		FROM accounts a
+		WHERE a.balance_date IS NOT NULL
+		ORDER BY a.name COLLATE NOCASE`, date)
+	if err != nil {
+		return nil, fmt.Errorf("store: account balances: %w", err)
+	}
+	defer rows.Close()
+	var balances []AccountBalance
+	for rows.Next() {
+		var b AccountBalance
+		if err := rows.Scan(&b.Slug, &b.Name, &b.Cents); err != nil {
+			return nil, fmt.Errorf("store: account balances: %w", err)
+		}
+		balances = append(balances, b)
+	}
+	return balances, rows.Err()
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
 
 func scanAccount(row scanner) (Account, error) {
 	var a Account
-	var iban, bank, cutover sql.NullString
-	err := row.Scan(&a.ID, &a.Slug, &a.Name, &iban, &bank, &a.Currency, &cutover)
+	var iban, bank, cutover, balanceDate sql.NullString
+	var balance sql.NullInt64
+	err := row.Scan(&a.ID, &a.Slug, &a.Name, &iban, &bank, &a.Currency, &cutover, &balance, &balanceDate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrNotFound
 	}
@@ -123,6 +174,7 @@ func scanAccount(row scanner) (Account, error) {
 		return Account{}, fmt.Errorf("store: read account: %w", err)
 	}
 	a.IBAN, a.Bank, a.CutoverDate = iban.String, bank.String, cutover.String
+	a.BalanceCents, a.BalanceDate = balance.Int64, balanceDate.String
 	return a, nil
 }
 

@@ -65,6 +65,12 @@ type Candidate struct {
 	// a transaction.
 	Superseded bool
 
+	// DayEndBalance is the account balance after this row, set only on the
+	// row that is the last of its day for the account, and only if the source
+	// states balances.
+	DayEndBalance    int64
+	HasDayEndBalance bool
+
 	// Category as named by the source; both empty means uncategorized.
 	MainCategory string
 	SubCategory  string
@@ -174,11 +180,18 @@ type run struct {
 	importID   int64
 	accounts   map[string]store.Account // by normalized IBAN
 	categories map[string]int64         // by slug
+	balances   map[int64]balance        // by account id: newest stated balance among imported days
+}
+
+type balance struct {
+	cents int64
+	date  string
 }
 
 func (r *run) importAll(ctx context.Context, fileName, hash string, candidates []Candidate) error {
 	r.accounts = make(map[string]store.Account)
 	r.categories = make(map[string]int64)
+	r.balances = make(map[int64]balance)
 
 	var err error
 	// importID is already set when an identical file is processed again.
@@ -207,6 +220,10 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			}
 			r.summary.SkippedCutover++
 			continue
+		}
+
+		if c.HasDayEndBalance && c.Tx.BookingDate >= r.balances[account.ID].date {
+			r.balances[account.ID] = balance{cents: c.DayEndBalance, date: c.Tx.BookingDate}
 		}
 
 		if c.Superseded {
@@ -272,6 +289,18 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			if err := r.tx.TagTransaction(ctx, t.ID, tag); err != nil {
 				return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
 			}
+		}
+	}
+
+	// Remember the newest balance the file states for each account. An older
+	// file must not replace a newer balance.
+	for _, account := range r.accounts {
+		b, ok := r.balances[account.ID]
+		if !ok || b.date < account.BalanceDate {
+			continue
+		}
+		if err := r.tx.SetBalance(ctx, account.ID, b.cents, b.date); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -38,7 +38,7 @@ CLI commands and web handlers are thin wrappers; logic lives in `internal/` so b
 - **Migrations** use goose with embedded SQL files, forward-only. Once a migration has been applied to a real database, never edit it; add a new file.
 - **Imports** are idempotent: a file is identified by its SHA-256, a row by its `dedup_key`. An import runs in one DB transaction. Parsers are pure functions without DB access.
 - **Manual work is never overwritten** by an import, not even with `--force`: allocations with `source = 'manual'` and transfer flags with `is_transfer_manual = 1`. Change the transfer flag only through `store.SetTransfer`.
-- **Frontend**: templ + HTMX + DaisyUI, server-rendered. No Node toolchain. Generated `*_templ.go` and built CSS are committed.
+- **Frontend**: templ + HTMX + DaisyUI, server-rendered. No Node toolchain. Generated `*_templ.go` and built CSS are committed; rerun `make generate` and `make css` after template changes. In `.templ` files, a text line must not start with `if`, `for` or `switch` (templ parses it as a statement). Keyboard handling lives in `internal/web/static/app.js`; verify changes to it in a real browser, the Go tests do not cover it.
 - **Dependencies**: keep them minimal and pure Go. Use the standard library for HTTP routing.
 - **Tests**: table-driven; DB tests run against a temporary database file. Each phase ends with `go test ./...` passing.
 
@@ -53,8 +53,8 @@ make build      # build ./budgeteer
 make test       # go test ./...
 make vet
 make run ARGS="account list"
-make generate   # templ generate (from Phase 3)
-make css        # tailwind build (from Phase 3)
+make generate   # templ generate, after editing *.templ
+make css        # tailwind build, after changing classes or assets/app.css
 ```
 
 ## Git

@@ -1,0 +1,241 @@
+package web
+
+import (
+	"github.com/GumboYaYa/budgeteer/internal/money"
+	"github.com/GumboYaYa/budgeteer/internal/store"
+	"strconv"
+)
+
+// txRow is one transaction line. The script in app.js works on these rows:
+// it reads data-id and data-transfer and moves focus between them.
+templ txRow(v store.TxView, withCategory bool) {
+	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-transfer?={ v.IsTransfer }>
+		<td class="w-8"><input type="checkbox" class="checkbox checkbox-xs tx-check" tabindex="-1" aria-label="Select transaction"/></td>
+		<td class="whitespace-nowrap tabular-nums">{ dateDE(v.BookingDate) }</td>
+		<td class="whitespace-nowrap text-base-content/70">{ v.AccountName }</td>
+		<td class="font-medium max-w-56 truncate" title={ v.Counterparty }>{ v.Counterparty }</td>
+		<td class="max-w-md truncate text-base-content/70" title={ v.Purpose }>{ v.Purpose }</td>
+		if withCategory {
+			<td class="whitespace-nowrap">
+				if v.IsTransfer {
+					<span class="badge badge-sm badge-outline">Transfer</span>
+				}
+				if v.CategoryName != "" {
+					<span class={ templ.KV("text-base-content/50", v.IsTransfer) }>{ v.CategoryName }</span>
+				} else if !v.IsTransfer && v.AmountCents != 0 {
+					<span class="badge badge-sm badge-warning badge-soft">Uncategorized</span>
+				}
+			</td>
+		}
+		<td class="text-right whitespace-nowrap tabular-nums font-medium">
+			if v.AmountCents > 0 {
+				<span class="text-success">+{ money.FormatDE(v.AmountCents) }</span>
+			} else {
+				{ money.FormatDE(v.AmountCents) }
+			}
+		</td>
+	</tr>
+}
+
+templ txRows(rows []store.TxView, withCategory bool) {
+	for _, v := range rows {
+		@txRow(v, withCategory)
+	}
+}
+
+templ txTable(rows []store.TxView, view string, more bool) {
+	<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+		<table class="table table-sm" data-tx-table data-view={ view } data-more?={ more }>
+			<thead>
+				<tr>
+					<th></th>
+					<th>Date</th>
+					<th>Account</th>
+					<th>Counterparty</th>
+					<th>Purpose</th>
+					if view == "list" {
+						<th>Category</th>
+					}
+					<th class="text-right">Amount</th>
+				</tr>
+			</thead>
+			<tbody>
+				@txRows(rows, view == "list")
+			</tbody>
+		</table>
+	</div>
+}
+
+// categoryPicker is the dialog used to choose a category from the keyboard.
+templ categoryPicker(items []pickerItem) {
+	<dialog id="picker" class="modal modal-top">
+		<div class="modal-box mt-16 mx-auto max-w-xl p-0">
+			<div class="p-3 border-b border-base-300">
+				<input id="picker-input" type="text" class="input w-full" placeholder="Type to find a category…" autocomplete="off" spellcheck="false" aria-label="Find category"/>
+			</div>
+			<ul id="picker-list" class="max-h-96 overflow-y-auto p-2" role="listbox">
+				for _, c := range items {
+					<li class="picker-item" role="option" data-id={ itoa(c.ID) } data-search={ c.FullName() + " " + c.Slug }>
+						<span>{ c.FullName() }</span>
+						if c.Recent {
+							<span class="badge badge-xs badge-ghost">recent</span>
+						}
+					</li>
+				}
+			</ul>
+			<p id="picker-empty" class="hidden p-4 text-sm text-base-content/60">No category matches. Add categories on the Categories page.</p>
+			<div class="px-3 py-2 border-t border-base-300 text-xs text-base-content/60">
+				<kbd class="kbd kbd-xs">↑</kbd> <kbd class="kbd kbd-xs">↓</kbd> choose · <kbd class="kbd kbd-xs">Enter</kbd> assign · <kbd class="kbd kbd-xs">Esc</kbd> cancel
+			</div>
+		</div>
+		<form method="dialog" class="modal-backdrop"><button tabindex="-1">close</button></form>
+	</dialog>
+}
+
+templ keyboardHelp(inbox bool) {
+	<dialog id="help" class="modal">
+		<div class="modal-box">
+			<h2 class="text-lg font-semibold mb-3">Keyboard shortcuts</h2>
+			<table class="table table-sm">
+				<tbody>
+					<tr><td><kbd class="kbd kbd-sm">j</kbd> <kbd class="kbd kbd-sm">k</kbd></td><td>Next / previous transaction (arrow keys work too)</td></tr>
+					<tr><td><kbd class="kbd kbd-sm">c</kbd> or <kbd class="kbd kbd-sm">Enter</kbd></td><td>Choose a category</td></tr>
+					<tr><td><kbd class="kbd kbd-sm">x</kbd></td><td>Select or unselect; actions then apply to all selected</td></tr>
+					<tr><td><kbd class="kbd kbd-sm">t</kbd></td><td>
+						if inbox {
+							Mark as transfer between own accounts
+						} else {
+							Mark or unmark as transfer between own accounts
+						}
+					</td></tr>
+					if inbox {
+						<tr><td><kbd class="kbd kbd-sm">u</kbd></td><td>Undo the last action</td></tr>
+					}
+					<tr><td><kbd class="kbd kbd-sm">Esc</kbd></td><td>Clear the selection</td></tr>
+					<tr><td><kbd class="kbd kbd-sm">?</kbd></td><td>Show this help</td></tr>
+				</tbody>
+			</table>
+		</div>
+		<form method="dialog" class="modal-backdrop"><button tabindex="-1">close</button></form>
+	</dialog>
+}
+
+templ inboxPage(d inboxData) {
+	@layout("Inbox", "inbox", d.Page.Total) {
+		<div class="flex items-baseline justify-between mb-3">
+			<h1 class="text-2xl font-semibold">Inbox</h1>
+			<p class="text-sm text-base-content/60">Press <kbd class="kbd kbd-xs">?</kbd> to see the keyboard shortcuts</p>
+		</div>
+		if d.Page.Total == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center">
+				<p class="text-lg font-medium">Nothing to categorize</p>
+				<p class="text-base-content/60 mt-1">Every transaction has a category. New ones appear here after an <a class="link" href="/import">import</a>.</p>
+			</div>
+		} else {
+			<p class="text-sm text-base-content/70 mb-2">
+				Without a category: <span id="inbox-total" class="font-medium tabular-nums">{ strconv.Itoa(d.Page.Total) }</span>
+				if d.Page.Total > len(d.Page.Rows) {
+					· showing the newest { strconv.Itoa(len(d.Page.Rows)) }, the next ones load when these are done
+				}
+			</p>
+			@txTable(d.Page.Rows, "inbox", d.Page.Total > len(d.Page.Rows))
+		}
+		<div id="toast" class="toast toast-end hidden"><div class="alert alert-error"><span id="toast-text"></span></div></div>
+		@categoryPicker(d.Picker)
+		@keyboardHelp(true)
+	}
+}
+
+templ listPage(d listData) {
+	@layout("Transactions", "transactions", d.Inbox) {
+		<h1 class="text-2xl font-semibold mb-3">Transactions</h1>
+		<form
+			class="bg-base-100 rounded-box border border-base-300 p-3 mb-3 flex flex-wrap gap-3 items-end"
+			action="/transactions"
+			method="get"
+			hx-get="/transactions"
+			hx-target="#results"
+			hx-push-url="true"
+			hx-trigger="change, input changed delay:300ms from:input[name='q'], submit"
+		>
+			<label class="flex flex-col gap-1 text-xs">
+				Search
+				<input type="search" name="q" value={ d.Filter.Text } class="input input-sm w-56" placeholder="Counterparty or purpose"/>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Account
+				<select name="account" class="select select-sm">
+					<option value="">All accounts</option>
+					for _, a := range d.Accounts {
+						<option value={ a.Slug } selected?={ a.Slug == d.Filter.AccountSlug }>{ a.Name }</option>
+					}
+				</select>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Category
+				<select name="category" class="select select-sm">
+					<option value="">All categories</option>
+					for _, c := range d.Categories {
+						<option value={ itoa(c.ID) } selected?={ c.ID == d.Filter.CategoryID }>{ c.FullName() }</option>
+					}
+				</select>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Status
+				<select name="status" class="select select-sm">
+					<option value="">Any</option>
+					<option value={ store.StatusUncategorized } selected?={ d.Filter.Status == store.StatusUncategorized }>Uncategorized</option>
+					<option value={ store.StatusTransfer } selected?={ d.Filter.Status == store.StatusTransfer }>Transfers</option>
+				</select>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				From
+				<input type="date" name="from" value={ d.Filter.From } class="input input-sm"/>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				To
+				<input type="date" name="to" value={ d.Filter.To } class="input input-sm"/>
+			</label>
+			<a href="/transactions" class="btn btn-sm btn-ghost">Reset</a>
+		</form>
+		<div id="results">
+			@listResults(d)
+		</div>
+		<div id="toast" class="toast toast-end hidden"><div class="alert alert-error"><span id="toast-text"></span></div></div>
+		@categoryPicker(d.Picker)
+		@keyboardHelp(false)
+	}
+}
+
+templ listResults(d listData) {
+	@listSummary(d, "mb-2")
+	if len(d.Page.Rows) == 0 {
+		<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+			No transactions match these filters.
+		</div>
+	} else {
+		@txTable(d.Page.Rows, "list", false)
+		@listSummary(d, "mt-2")
+	}
+}
+
+// listSummary is the line with the totals and the pager, shown above and
+// below the table.
+templ listSummary(d listData, margin string) {
+	<div class={ "flex items-center justify-between text-sm text-base-content/70", margin }>
+		<p>
+			{ plural(d.Page.Total, "transaction", "transactions") } · sum of these { money.FormatDE(d.Page.SumCents) }
+		</p>
+		if d.Pages > 1 {
+			<div class="join">
+				if d.PrevURL != "" {
+					<a class="join-item btn btn-xs" href={ templ.SafeURL(d.PrevURL) } hx-get={ d.PrevURL } hx-target="#results" hx-push-url="true" hx-swap="innerHTML show:#results:top">‹ Newer</a>
+				}
+				<span class="join-item btn btn-xs btn-disabled">Page { strconv.Itoa(d.PageNo) } of { strconv.Itoa(d.Pages) }</span>
+				if d.NextURL != "" {
+					<a class="join-item btn btn-xs" href={ templ.SafeURL(d.NextURL) } hx-get={ d.NextURL } hx-target="#results" hx-push-url="true" hx-swap="innerHTML show:#results:top">Older ›</a>
+				}
+			</div>
+		}
+	</div>
+}

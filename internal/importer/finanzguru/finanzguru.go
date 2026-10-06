@@ -24,6 +24,7 @@ const (
 	colAccountIBAN     = "Referenzkonto"
 	colAccountName     = "Name Referenzkonto"
 	colAmount          = "Betrag"
+	colBalance         = "Kontostand"
 	colCurrency        = "Waehrung"
 	colCounterparty    = "Beguenstigter/Auftraggeber"
 	colCounterpartyRef = "IBAN Beguenstigter/Auftraggeber"
@@ -42,7 +43,7 @@ const (
 )
 
 var requiredColumns = []string{
-	colBookingDate, colAccountIBAN, colAccountName, colAmount, colCurrency,
+	colBookingDate, colAccountIBAN, colAccountName, colAmount, colBalance, colCurrency,
 	colCounterparty, colCounterpartyRef, colPurpose, colEndToEndRef, colMandateRef,
 	colCreditorID, colMainCategory, colSubCategory, colTransfer, colContract, colTags, colBookingID, colSplitOriginal, colSplitType,
 }
@@ -91,7 +92,48 @@ func (Parser) Normalize(rows []importer.RawRow) ([]importer.Candidate, error) {
 	if err := checkSplits(candidates); err != nil {
 		return nil, err
 	}
+	if err := markDayEndBalances(candidates); err != nil {
+		return nil, err
+	}
 	return candidates, nil
+}
+
+// markDayEndBalances sets the day-end balance on the chronologically last row
+// of every day and account. Kontostand is the balance after each row; the
+// export lists rows newest first, but an oldest-first file is handled too.
+// Split parts are skipped: the balance belongs to their original.
+func markDayEndBalances(candidates []importer.Candidate) error {
+	if len(candidates) == 0 {
+		return nil
+	}
+	newestFirst := candidates[0].Tx.BookingDate >= candidates[len(candidates)-1].Tx.BookingDate
+	type day struct{ account, date string }
+	seen := make(map[day]bool)
+	for n := range candidates {
+		i := n
+		if !newestFirst {
+			i = len(candidates) - 1 - n
+		}
+		c := &candidates[i]
+		if strings.TrimSpace(c.Row.Fields[colSplitOriginal]) != "" {
+			continue
+		}
+		key := day{c.AccountIBAN, c.Tx.BookingDate}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		text := strings.TrimSpace(c.Row.Fields[colBalance])
+		if text == "" {
+			continue
+		}
+		cents, err := money.ParseEN(text)
+		if err != nil {
+			return fmt.Errorf("line %d: %s: %w", c.Row.LineNo, colBalance, err)
+		}
+		c.DayEndBalance, c.HasDayEndBalance = cents, true
+	}
+	return nil
 }
 
 // checkSplits makes sure that leaving out the split originals loses no money:

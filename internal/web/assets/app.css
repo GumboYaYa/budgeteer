@@ -1,0 +1,62 @@
+/* Source stylesheet. Build with `make css`; the result is committed as
+   internal/web/static/app.css so the binary builds without the toolchain. */
+@import "tailwindcss";
+@plugin "../../../bin/daisyui.mjs" {
+  themes: light --default, dark --prefersdark;
+}
+@source "../*.templ";
+@source "../static/app.js";
+
+/* Chart colors: categorical slots 1 and 2 of the data-viz palette, with a
+   separate step for the dark surface. */
+:root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --chart-ink: #52514e;
+  --chart-grid: #e6e5e0;
+  --chart-surface: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --chart-ink: #c3c2b7;
+    --chart-grid: #34373d;
+    --chart-surface: #1d232a;
+  }
+}
+
+.chart-box {
+  position: relative;
+  width: 100%;
+}
+
+/* Transaction rows: keyboard focus and multi-selection. */
+tr.tx-row {
+  cursor: default;
+}
+tr.tx-row.tx-selected {
+  background-color: color-mix(in oklab, var(--color-primary) 10%, transparent);
+}
+tr.tx-row.tx-focus {
+  background-color: color-mix(in oklab, var(--color-primary) 18%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+/* Category picker entries. */
+.picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-field);
+  cursor: pointer;
+}
+.picker-item[hidden] {
+  display: none;
+}
+.picker-item.picker-active {
+  background-color: var(--color-primary);
+  color: var(--color-primary-content);
+}

@@ -2,7 +2,7 @@
 
 A local, single-user personal finance app: import bank transactions, categorize them, and analyze spending. The data lives in one SQLite file on your machine and can always be exported.
 
-> **Status: early rewrite.** The project is being rebuilt in Go. So far `migrate`, `account add`, `account list` and `import finanzguru` work; the web UI and export are not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
+> **Status: early rewrite.** The project is being rebuilt in Go. Importing a Finanzguru export and the web UI (inbox, transactions, overview, categories, import) work; CSV/Parquet export, backup and the DKB importer are not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
 
 ## What it will do
 
@@ -22,7 +22,9 @@ Planned for later: a DKB CSV importer, and automatic categorization through rule
 | Web UI | templ + HTMX + DaisyUI, server-rendered |
 | Runs on | localhost only, no accounts, no cloud |
 
-## Usage (planned)
+## Usage
+
+`export` and `backup` are planned and do not exist yet.
 
 ```
 budgeteer migrate
@@ -82,7 +84,11 @@ make build    # builds ./budgeteer
 make test     # go test ./...
 make vet
 make run ARGS="account list"
+make generate # after editing *.templ
+make css      # after changing classes or assets/app.css (downloads the Tailwind CLI and DaisyUI into bin/ on first use)
 ```
+
+The generated `*_templ.go` files and `internal/web/static/app.css` are committed, so `make build` needs neither tool.
 
 ```
 specs/initial_spec.md           original spec
