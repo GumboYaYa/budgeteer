@@ -2,7 +2,7 @@
 
 A local, single-user personal finance app: import bank transactions, categorize them, and analyze spending. The data lives in one SQLite file on your machine and can always be exported.
 
-> **Status: early rewrite.** The project is being rebuilt in Go. So far only `migrate`, `account add` and `account list` work; importing and the web UI are not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
+> **Status: early rewrite.** The project is being rebuilt in Go. So far `migrate`, `account add`, `account list` and `import finanzguru` work; the web UI and export are not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
 
 ## What it will do
 

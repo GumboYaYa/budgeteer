@@ -28,6 +28,7 @@ Environment at time of writing: Go 1.27 installed; `templ`, `tailwindcss` not in
 | D14 | Module path | `github.com/GumboYaYa/budgeteer` | Confirmed. |
 | D16 | Repeated Finanzguru imports | Supported. Each export contains all transactions; rows are matched by `Buchungs-ID` (`dedup_key = fg:<id>`). New rows are inserted. For existing rows only the category is refreshed, and only while the allocation still has `source = 'finanzguru'` (or there is none); `manual` allocations are never touched. Amount, text, transfer flag and tags of existing rows are left alone. | Finanzguru stays the source of truth for what was categorized there, without overwriting work done in Budgeteer. |
 | D17 | Moving the cut-over | A later Finanzguru import may pass a later `--cutover`. It is rejected if the account already has bank-CSV transactions on or before the new date. | Otherwise the same transaction would exist once from each source. |
+| D18 | Finanzguru details not covered by the spec | (a) The `Tags` column is split on `,` and `;`, tags are lower-cased. (b) A category that a later export no longer contains is kept, not removed. (c) Two rows with the same `Buchungs-ID` in one file count as one transaction. (d) A cut-over date is also rejected when the account already has Finanzguru transactions after it. (e) Re-importing an identical file changes nothing, including the cut-over date. | (a) is an assumption to verify in 2.3. (d) mirrors D17: otherwise the bank CSV would import those days again. |
 | D15 | Splits | **Not built.** One category per transaction: the importer and the UI always write exactly one allocation for the full amount. The `allocations` table stays as it is. | Splits were never used in Finanzguru and are not wanted. The table is still needed for `source`, and later for rules and suggestions. |
 
 ### Migration tool
@@ -90,7 +91,7 @@ testdata/   data/ (ignored)   Makefile   README.md
 
 Finanzguru stays the only data source until automatic categorization exists; the DKB importer is Phase 5.
 
-- [ ] **2.1 Shared pipeline (`internal/importer/importer.go`).**
+- [x] **2.1 Shared pipeline (`internal/importer/importer.go`).**
 
   ```go
   type Parser interface {
@@ -112,11 +113,11 @@ Finanzguru stays the only data source until automatic categorization exists; the
 
   Parsers are pure (no DB access) so they can be unit-tested and re-run on `raw_records` later.
 
-- [ ] **2.2 Shared helpers.** `slugify` (lowercase, `ä→ae ö→oe ü→ue ß→ss`, non-alphanumerics → `-`, collapse; `Essen & Trinken` → `essen-trinken`), date parser `dd.mm.yyyy` → ISO. Tests.
+- [x] **2.2 Shared helpers.** `slugify` (lowercase, `ä→ae ö→oe ü→ue ß→ss`, non-alphanumerics → `-`, collapse; `Essen & Trinken` → `essen-trinken`), date parser `dd.mm.yyyy` → ISO. Tests.
 
 - [ ] **2.3 Inspect the real Finanzguru export.** Throwaway queries, nothing committed: confirm that `Split-Typ` and `Referenz-Original-ID` are empty everywhere (D15); rows without category; per-category consistency of the "excluded from income" column (D8); number of accounts. With a second export taken later: check that `Buchungs-ID` is stable for the same transaction across exports, including transactions that were still pending in the first one.
 
-- [ ] **2.4 Finanzguru importer (`internal/importer/finanzguru`).** Column mapping exactly per spec §4.1. Specifics:
+- [x] **2.4 Finanzguru importer (`internal/importer/finanzguru`).** Column mapping exactly per spec §4.1. Specifics:
   - Accounts: match by IBAN, else create with `slug = slugify(Name Referenzkonto)`.
   - `--cutover YYYY-MM-DD`: stored in `accounts.cutover_date` for every account in the file; only rows with `booking_date <= cutover` become transactions. Without the flag: use the stored value, or import everything if none. Moving it later is checked per D17.
   - Re-import of a newer full export per D16: `Summary` reports new, duplicate and updated (category refreshed) rows.
@@ -128,9 +129,9 @@ Finanzguru stays the only data source until automatic categorization exists; the
   - `excluded_from_income` per D8.
   - `Split-Typ` / `Referenz-Original-ID` are not interpreted; the import aborts with a clear message if either is non-empty (D15).
 
-- [ ] **2.5 CLI.** `import finanzguru <file> [--cutover]`; prints the `Summary`.
+- [x] **2.5 CLI.** `import finanzguru <file> [--cutover]`; prints the `Summary`.
 
-- [ ] **2.6 Fixtures & tests (`testdata/`, anonymized).**
+- [x] **2.6 Fixtures & tests (`testdata/`, anonymized).**
   - `finanzguru_sample.csv`: two accounts, card payment, transfer, tagged row, contract row, e-mail as counterparty ref, uncategorized row.
   - `finanzguru_sample_v2.csv`: the same rows plus new ones, one row with a changed category, one formerly uncategorized row now categorized.
   - Tests: `finanzguru_sample` then `_v2` → only the new rows are added, `raw_records` grows only by those, the changed category is refreshed, a category set by hand in between is kept; same file twice → `AlreadyImported`, row counts unchanged; rows after the cut-over are skipped; a failing row rolls back the whole import.
@@ -189,7 +190,7 @@ Needed for the switch from Finanzguru to DKB-only; can wait until then. Deduplic
   - Date parser `dd.mm.yy` → ISO.
 - [ ] **5.2 CLI and UI.** `import dkb --account <slug> <file>`; the `/import` page gets a source and account select.
 - [ ] **5.3 Fixtures & tests (`testdata/`, anonymized, cut from a real Google Sheets export).** `dkb_a.csv`, `dkb_b.csv` with overlapping date ranges; include `Vorgemerkt`, a statement row, two identical transactions on one day, a transfer to the second own account, amounts `-9,99` / `1.234,56` / `-57`. One extra `;`-separated variant. Tests: same file twice → `AlreadyImported`; `dkb_a` then `dkb_b` → no duplicates and both identical same-day rows present; a `Vorgemerkt` row in A that is `Gebucht` in B is imported exactly once; rows on or before the cut-over are skipped; a later Finanzguru `--cutover` is rejected when DKB rows exist before it (D17).
-- [ ] **5.4 Switch-over run.** Last Finanzguru import with `--cutover <date>`, then the first real DKB export; check that the days around the cut-over contain every transaction exactly once.
+- [ ] **5.4 Switch-over run.** Add `account set-cutover --slug <slug> --date <date>` with the checks from D17/D18, so the date can be set without a new export file. Last Finanzguru import with `--cutover <date>`, then the first real DKB export; check that the days around the cut-over contain every transaction exactly once.
 
 **Done when:** two overlapping real DKB exports import without duplicates.
 

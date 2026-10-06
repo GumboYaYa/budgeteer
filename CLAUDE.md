@@ -21,6 +21,7 @@ cmd/budgeteer/      kong CLI wiring only, no logic
 internal/store/     DB open, migrations, queries
 internal/money/     cents parsing and formatting
 internal/importer/  shared pipeline + one package per source
+internal/slug/      slugs for accounts and categories
 internal/export/    CSV / Parquet
 internal/web/       handlers, templ components, embedded static assets
 testdata/           anonymized fixtures

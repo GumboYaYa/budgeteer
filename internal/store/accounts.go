@@ -45,7 +45,7 @@ func (s *Store) CreateAccount(ctx context.Context, a Account) (Account, error) {
 		a.Currency = "EUR"
 	}
 
-	res, err := s.DB.ExecContext(ctx,
+	res, err := s.q.ExecContext(ctx,
 		`INSERT INTO accounts (slug, name, iban, bank, currency, cutover_date) VALUES (?, ?, ?, ?, ?, ?)`,
 		a.Slug, a.Name, nullable(a.IBAN), nullable(a.Bank), a.Currency, nullable(a.CutoverDate))
 	if err != nil {
@@ -65,19 +65,19 @@ func (s *Store) CreateAccount(ctx context.Context, a Account) (Account, error) {
 
 // AccountBySlug returns ErrNotFound if no account has the slug.
 func (s *Store) AccountBySlug(ctx context.Context, slug string) (Account, error) {
-	return scanAccount(s.DB.QueryRowContext(ctx,
+	return scanAccount(s.q.QueryRowContext(ctx,
 		`SELECT `+accountColumns+` FROM accounts WHERE slug = ?`, slug))
 }
 
 // AccountByIBAN returns ErrNotFound if no account has the IBAN.
 func (s *Store) AccountByIBAN(ctx context.Context, iban string) (Account, error) {
-	return scanAccount(s.DB.QueryRowContext(ctx,
+	return scanAccount(s.q.QueryRowContext(ctx,
 		`SELECT `+accountColumns+` FROM accounts WHERE iban = ?`, NormalizeIBAN(iban)))
 }
 
 // ListAccounts returns all accounts ordered by slug.
 func (s *Store) ListAccounts(ctx context.Context) ([]Account, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+accountColumns+` FROM accounts ORDER BY slug`)
+	rows, err := s.q.QueryContext(ctx, `SELECT `+accountColumns+` FROM accounts ORDER BY slug`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list accounts: %w", err)
 	}
@@ -97,7 +97,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]Account, error) {
 // SetCutover stores the cut-over date (YYYY-MM-DD) of an account; an empty
 // date clears it.
 func (s *Store) SetCutover(ctx context.Context, accountID int64, date string) error {
-	res, err := s.DB.ExecContext(ctx,
+	res, err := s.q.ExecContext(ctx,
 		`UPDATE accounts SET cutover_date = ? WHERE id = ?`, nullable(date), accountID)
 	if err != nil {
 		return fmt.Errorf("store: set cut-over: %w", err)

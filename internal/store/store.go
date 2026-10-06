@@ -27,8 +27,17 @@ var ErrNotFound = errors.New("not found")
 // write transactions take the lock up front instead of failing on upgrade.
 const pragmas = "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
 
+// Store runs queries either directly on the database or, inside InTx, on one
+// transaction.
 type Store struct {
 	DB *sql.DB
+	q  dbtx
+}
+
+type dbtx interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // Open opens the database at path, creating the file and its directory if
@@ -47,11 +56,31 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
-	return &Store{DB: db}, nil
+	return &Store{DB: db, q: db}, nil
 }
 
 func (s *Store) Close() error {
 	return s.DB.Close()
+}
+
+// InTx runs fn in one database transaction. All Store methods called on the
+// tx argument are part of it; it is rolled back if fn returns an error.
+func (s *Store) InTx(ctx context.Context, fn func(tx *Store) error) error {
+	if _, nested := s.q.(*sql.Tx); nested {
+		return errors.New("store: InTx called inside a transaction")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := fn(&Store{DB: s.DB, q: tx}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit: %w", err)
+	}
+	return nil
 }
 
 // Migrate applies all pending migrations and returns the file names of those
