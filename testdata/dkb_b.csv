@@ -1,0 +1,10 @@
+Girokonto,DE00111122223333444401,,,,,,,,,,
+,,,,,,,,,,,
+Kontostand vom 20.10.2026:,"4.897,90 €",,,,,,,,,,
+,,,,,,,,,,,
+Buchungsdatum,Wertstellung,Status,Zahlungspflichtige*r,Zahlungsempfänger*in,Verwendungszweck,Umsatztyp,IBAN,Betrag (€),Gläubiger-ID,Mandatsreferenz,Kundenreferenz
+15.10.26,15.10.26,Gebucht,Max Mustermann,REWE,VISA Debitkartenumsatz vom 14.10.2026,Ausgang,DE00999900000000000009,-57,,,
+11.10.26,11.10.26,Gebucht,Max Mustermann,Tankstelle Nord,VISA Debitkartenumsatz vom 10.10.2026,Ausgang,DE00999900000000000009,"-45,10",,,
+09.10.26,09.10.26,Gebucht,Max Mustermann,Baeckerei Beispiel,VISA Debitkartenumsatz vom 08.10.2026,Ausgang,DE00999900000000000009,"-3,50",,,
+09.10.26,09.10.26,Gebucht,Max Mustermann,Baeckerei Beispiel,VISA Debitkartenumsatz vom 08.10.2026,Ausgang,DE00999900000000000009,"-3,50",,,
+08.10.26,08.10.26,Gebucht,Max Mustermann,Max Mustermann,Haushaltskasse,Ausgang,DE00111122223333444402,-500,,,

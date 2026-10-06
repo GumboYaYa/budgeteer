@@ -1,0 +1,333 @@
+package web
+
+import (
+	"github.com/GumboYaYa/budgeteer/internal/importer"
+	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
+	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/store"
+	"github.com/GumboYaYa/budgeteer/internal/money"
+	"strconv"
+	"strings"
+)
+
+templ overviewPage(d overviewData) {
+	@layout("Overview", "overview", d.Inbox) {
+		<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+			<h1 class="text-2xl font-semibold">{ d.Label }</h1>
+			<form action="/" method="get" class="join">
+				<a class="join-item btn btn-sm" href={ templ.SafeURL("/?month=" + d.Prev) } aria-label="Previous month">‹</a>
+				<input type="month" name="month" value={ d.Month } class="join-item input input-sm" onchange="this.form.submit()" aria-label="Month"/>
+				<a class="join-item btn btn-sm" href={ templ.SafeURL("/?month=" + d.Next) } aria-label="Next month">›</a>
+			</form>
+		</div>
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+			@statTile("Income", money.FormatDE(d.Income), "this month")
+			@statTile("Spending", money.FormatDE(d.Spending), "this month")
+			@statTile("Net", money.FormatDE(d.Income+d.Spending), "income minus spending")
+			<a href="/inbox" class="bg-base-100 rounded-box border border-base-300 p-4 hover:border-primary">
+				<div class="text-sm text-base-content/60">Inbox</div>
+				<div class="text-2xl font-semibold tabular-nums">{ strconv.Itoa(d.Inbox) }</div>
+				<div class="text-xs text-base-content/60">uncategorized in total</div>
+			</a>
+		</div>
+		<p class="text-xs text-base-content/60 mb-4">Transfers between your own accounts are left out of income, spending and the category figures.</p>
+		if len(d.Balances) > 0 {
+			<section class="bg-base-100 rounded-box border border-base-300 p-4 mb-4">
+				<h2 class="font-semibold mb-2">Account balances on { dateDE(d.BalanceDate) }</h2>
+				<table class="table table-sm">
+					<tbody>
+						for _, b := range d.Balances {
+							<tr>
+								<td><a class="link link-hover" href={ templ.SafeURL("/transactions?account=" + b.Slug) }>{ b.Name }</a></td>
+								<td class="text-right tabular-nums font-medium">{ money.FormatDE(b.Cents) }</td>
+							</tr>
+						}
+						if len(d.Balances) > 1 {
+							<tr>
+								<td class="font-semibold">Total</td>
+								<td class="text-right tabular-nums font-semibold">{ money.FormatDE(d.BalanceTotal) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</section>
+		}
+		if len(d.Categories) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60 mb-4">
+				No transactions in { d.Label }.
+			</div>
+		} else {
+			<div class="grid lg:grid-cols-2 gap-4 mb-4">
+				<section class="bg-base-100 rounded-box border border-base-300 p-4">
+					<h2 class="font-semibold mb-2">Spending by main category</h2>
+					if len(d.Chart.Spending.Labels) == 0 {
+						<p class="text-sm text-base-content/60">No spending this month.</p>
+					} else {
+						<div class="chart-box" style={ "height:" + strconv.Itoa(40+28*len(d.Chart.Spending.Labels)) + "px" }>
+							<canvas id="chart-spending" role="img" aria-label={ "Bar chart of spending by main category in " + d.Label + ". The table next to it holds the same figures." }></canvas>
+						</div>
+					}
+				</section>
+				<section class="bg-base-100 rounded-box border border-base-300 p-4">
+					<h2 class="font-semibold mb-2">All main categories</h2>
+					<table class="table table-sm">
+						<thead>
+							<tr><th>Category</th><th class="text-right">Transactions</th><th class="text-right">Net amount</th></tr>
+						</thead>
+						<tbody>
+							for _, c := range d.Categories {
+								<tr>
+									<td><a class="link link-hover" href={ templ.SafeURL(categoryURL(c, d.From, d.To)) }>{ categoryLabel(c) }</a></td>
+									<td class="text-right tabular-nums">{ strconv.Itoa(c.Count) }</td>
+									<td class="text-right tabular-nums">{ money.FormatDE(c.Cents) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</section>
+			</div>
+		}
+		<section class="bg-base-100 rounded-box border border-base-300 p-4">
+			<h2 class="font-semibold mb-2">Income and spending, last 12 months</h2>
+			<div class="chart-box" style="height:280px">
+				<canvas id="chart-trend" role="img" aria-label="Bar chart of income and spending per month for the last twelve months. The table below holds the same figures."></canvas>
+			</div>
+			<details class="mt-3">
+				<summary class="text-sm cursor-pointer text-base-content/70">Show as table</summary>
+				<table class="table table-sm mt-2">
+					<thead>
+						<tr><th>Month</th><th class="text-right">Income</th><th class="text-right">Spending</th><th class="text-right">Balance</th></tr>
+					</thead>
+					<tbody>
+						for _, m := range d.Trend {
+							<tr>
+								<td><a class="link link-hover" href={ templ.SafeURL("/?month=" + m.Month) }>{ monthShort(m.Month) }</a></td>
+								<td class="text-right tabular-nums">{ money.FormatDE(m.IncomeCents) }</td>
+								<td class="text-right tabular-nums">{ money.FormatDE(m.SpendingCents) }</td>
+								<td class="text-right tabular-nums">{ money.FormatDE(m.IncomeCents + m.SpendingCents) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</details>
+		</section>
+		@templ.JSONScript("chart-data", d.Chart)
+		<script src="/static/chart.umd.min.js" defer></script>
+		<script src="/static/charts.js" defer></script>
+	}
+}
+
+templ statTile(label, value, note string) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="text-2xl font-semibold tabular-nums">{ value }</div>
+		if note != "" {
+			<div class="text-xs text-base-content/60">{ note }</div>
+		}
+	</div>
+}
+
+templ importPage(inbox int, accounts []store.Account) {
+	@layout("Import", "import", inbox) {
+		<h1 class="text-2xl font-semibold mb-3">Import</h1>
+		<div class="grid lg:grid-cols-2 gap-4">
+			<form
+				class="bg-base-100 rounded-box border border-base-300 p-4 flex flex-col gap-4"
+				action="/import"
+				method="post"
+				enctype="multipart/form-data"
+				hx-post="/import"
+				hx-encoding="multipart/form-data"
+				hx-target="#import-result"
+				hx-disabled-elt="find button"
+			>
+				<fieldset class="flex flex-col gap-2 text-sm">
+					<legend class="mb-1">Source</legend>
+					<label class="flex items-center gap-2">
+						<input type="radio" name="source" value={ finanzguru.Source } class="radio radio-sm" checked/>
+						Finanzguru export
+					</label>
+					<label class="flex items-center gap-2">
+						<input type="radio" name="source" value={ dkb.Source } class="radio radio-sm"/>
+						DKB account export
+					</label>
+				</fieldset>
+				<label class="flex flex-col gap-1 text-sm">
+					File (CSV)
+					<input type="file" name="file" accept=".csv,text/csv" class="file-input w-full" required/>
+				</label>
+				<label class="flex flex-col gap-1 text-sm" data-source={ dkb.Source }>
+					Account
+					<select name="account" class="select w-full">
+						<option value="">Choose…</option>
+						for _, a := range accounts {
+							<option value={ a.Slug }>{ a.Name }</option>
+						}
+					</select>
+					<span class="text-xs text-base-content/60">A DKB export covers one account. If the account also has Finanzguru history, it needs a cut-over date first; the import tells you how to set it.</span>
+				</label>
+				<label class="flex flex-col gap-1 text-sm" data-source={ finanzguru.Source }>
+					Cut-over date (optional)
+					<input type="date" name="cutover" class="input"/>
+					<span class="text-xs text-base-content/60">Import only transactions up to this date and remember it for the accounts in the file. Leave empty while Finanzguru is your only source.</span>
+				</label>
+				<label class="flex items-start gap-2 text-sm">
+					<input type="checkbox" name="force" value="1" class="checkbox checkbox-sm mt-0.5"/>
+					<span>
+						Process again and overwrite details
+						<span class="block text-xs text-base-content/60">Also handles a file that was imported before, and replaces the details of existing transactions with those in the file. Categories and transfer marks you set by hand are kept.</span>
+					</span>
+				</label>
+				<button class="btn btn-primary self-start">Import file</button>
+			</form>
+			<div id="import-result">
+				<div class="bg-base-100 rounded-box border border-base-300 p-4 text-sm text-base-content/70 flex flex-col gap-2">
+					<p>A Finanzguru export contains your full history. Importing a newer one adds only the transactions that are not here yet and picks up category changes you made in Finanzguru.</p>
+					<p>DKB exports may overlap: transactions that are already here are skipped. Bookings that are still pending are left out and come with a later export.</p>
+				</div>
+			</div>
+		</div>
+		<script src="/static/import.js" defer></script>
+	}
+}
+
+templ importResult(s importer.Summary, problem string) {
+	if problem != "" {
+		<div role="alert" class="alert alert-error alert-soft">
+			<div>
+				<p class="font-medium">Nothing was imported</p>
+				<p class="text-sm">{ problem }</p>
+			</div>
+		</div>
+	} else if s.AlreadyImported {
+		<div role="alert" class="alert alert-info alert-soft">
+			<div>
+				<p class="font-medium">This exact file was imported before</p>
+				<p class="text-sm">Nothing changed. Tick “Process again and overwrite details” to run it anyway.</p>
+			</div>
+		</div>
+	} else {
+		<div class="bg-base-100 rounded-box border border-base-300 p-4">
+			<h2 class="font-semibold mb-2">Import finished</h2>
+			<table class="table table-sm">
+				<tbody>
+					@summaryRow("Rows in file", s.Rows)
+					@summaryRow("New transactions", s.New)
+					@summaryRow("Already imported", s.Duplicates)
+					@summaryRow("Categories refreshed", s.Updated)
+					if s.FieldsUpdated > 0 {
+						@summaryRow("Details overwritten", s.FieldsUpdated)
+					}
+					if s.SkippedCutover > 0 {
+						@summaryRow("Skipped by cut-over date", s.SkippedCutover)
+					}
+					if s.SkippedPending > 0 {
+						@summaryRow("Not booked yet (they come with a later export)", s.SkippedPending)
+					}
+					if s.SkippedSuperseded > 0 {
+						@summaryRow("Split originals (their parts are imported instead)", s.SkippedSuperseded)
+					}
+					if s.Removed > 0 {
+						@summaryRow("Removed because they are now split", s.Removed)
+					}
+					if s.CategoriesCreated > 0 {
+						@summaryRow("Categories created", s.CategoriesCreated)
+					}
+				</tbody>
+			</table>
+			if len(s.AccountsCreated) > 0 {
+				<p class="text-sm mt-2">Accounts created: { strings.Join(s.AccountsCreated, ", ") }</p>
+			}
+			<a href="/inbox" class="btn btn-sm btn-primary mt-3">Go to the inbox</a>
+		</div>
+	}
+}
+
+templ summaryRow(label string, n int) {
+	<tr><td>{ label }</td><td class="text-right tabular-nums font-medium">{ strconv.Itoa(n) }</td></tr>
+}
+
+templ categoriesPage(d categoriesData) {
+	@layout("Categories", "categories", d.Inbox) {
+		<h1 class="text-2xl font-semibold mb-3">Categories</h1>
+		@categoriesSection(d)
+	}
+}
+
+templ categoriesSection(d categoriesData) {
+	<div id="categories">
+		if d.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
+		}
+		<form class="bg-base-100 rounded-box border border-base-300 p-3 mb-3 flex flex-wrap gap-3 items-end" hx-post="/categories" hx-target="#categories" hx-swap="outerHTML">
+			<label class="flex flex-col gap-1 text-xs">
+				New category
+				<input type="text" name="name" class="input input-sm w-56" placeholder="Name" required/>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Under
+				<select name="parent_id" class="select select-sm">
+					<option value="0">(main category)</option>
+					for _, m := range d.Mains {
+						<option value={ itoa(m.ID) }>{ m.Name }</option>
+					}
+				</select>
+			</label>
+			<button class="btn btn-sm btn-primary">Add</button>
+		</form>
+		if len(d.Categories) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+				No categories yet. They are created by the first import, or add one above.
+			</div>
+		} else {
+			<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+				<table class="table table-sm">
+					<thead>
+						<tr><th>Name</th><th>Key</th><th class="text-right">Transactions</th><th>Move under</th><th>Merge into</th></tr>
+					</thead>
+					<tbody>
+						for _, c := range d.Categories {
+							<tr class={ templ.KV("bg-base-200/60", c.ParentID == 0) }>
+								<td>
+									<form class={ "join", templ.KV("pl-6", c.ParentID != 0) } hx-post={ "/categories/" + itoa(c.ID) + "/rename" } hx-target="#categories" hx-swap="outerHTML">
+										<input type="text" name="name" value={ c.Name } class={ "join-item input input-sm w-56", templ.KV("font-semibold", c.ParentID == 0) } aria-label={ "Name of " + c.FullName() } required/>
+										<button class="join-item btn btn-sm">Rename</button>
+									</form>
+								</td>
+								<td><code class="text-xs text-base-content/60">{ c.Slug }</code></td>
+								<td class="text-right tabular-nums">{ strconv.Itoa(c.Uses) }</td>
+								<td>
+									<form class="join" hx-post={ "/categories/" + itoa(c.ID) + "/move" } hx-target="#categories" hx-swap="outerHTML">
+										<select name="parent_id" class="join-item select select-sm w-44" aria-label={ "Move " + c.FullName() + " under" }>
+											<option value="0" selected?={ c.ParentID == 0 }>(main category)</option>
+											for _, m := range d.Mains {
+												if m.ID != c.ID {
+													<option value={ itoa(m.ID) } selected?={ m.ID == c.ParentID }>{ m.Name }</option>
+												}
+											}
+										</select>
+										<button class="join-item btn btn-sm">Move</button>
+									</form>
+								</td>
+								<td>
+									<form class="join" hx-post={ "/categories/" + itoa(c.ID) + "/merge" } hx-target="#categories" hx-swap="outerHTML" hx-confirm={ "Merge “" + c.FullName() + "” into the selected category? Its transactions move there and it is deleted. This cannot be undone." }>
+										<select name="into_id" class="join-item select select-sm w-44" aria-label={ "Merge " + c.FullName() + " into" }>
+											<option value="">Choose…</option>
+											for _, o := range d.Categories {
+												if o.ID != c.ID {
+													<option value={ itoa(o.ID) }>{ o.FullName() }</option>
+												}
+											}
+										</select>
+										<button class="join-item btn btn-sm">Merge</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			<p class="text-xs text-base-content/60 mt-2">Renaming keeps the key. Moving changes it. A category with sub categories cannot be moved or merged until they are moved or merged first.</p>
+		}
+	</div>
+}
