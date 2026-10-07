@@ -11,24 +11,41 @@ import (
 // TxView is a transaction as shown in lists: joined with its account and its
 // confirmed category.
 type TxView struct {
-	ID             int64
-	BookingDate    string
-	PurchaseDate   string
-	AccountSlug    string
-	AccountName    string
-	Counterparty   string
-	Purpose        string
-	AmountCents    int64
-	IsTransfer     bool
-	CategoryID     int64  // 0 when uncategorized
-	CategoryName   string // "Main / Sub"
-	CategorySource string
+	ID           int64
+	BookingDate  string
+	PurchaseDate string
+	AccountSlug  string
+	AccountName  string
+	Counterparty string
+	Purpose      string
+	AmountCents  int64
+	IsTransfer   bool
+	IsReserve    bool // marked by hand as irregular expense for the reserve
+	// The recurring group, if any. RecurringActive is false for a group that
+	// has ended. ReserveViaGroup is set when the group makes the transaction
+	// count for the reserve, which only an active group does.
+	RecurringID     int64
+	RecurringName   string
+	RecurringActive bool
+	ReserveViaGroup bool
+	CategoryID      int64  // 0 when uncategorized
+	CategoryName    string // "Main / Sub"
+	CategorySource  string
 }
 
 // Status values for TxFilter.
 const (
 	StatusUncategorized = "uncategorized"
 	StatusTransfer      = "transfer"
+	StatusReserve       = "reserve"
+)
+
+// TxFilter.Recurring values besides a group id: in any group, in a group
+// that is active, in one that has ended.
+const (
+	AnyRecurring      = -1
+	ActiveRecurring   = -2
+	InactiveRecurring = -3
 )
 
 // TxFilter selects transactions. Zero values mean "no restriction".
@@ -38,8 +55,11 @@ type TxFilter struct {
 	CategoryID  int64  // the category itself or any of its sub categories
 	Text        string // substring of counterparty or purpose
 	Status      string
-	Limit       int
-	Offset      int
+	// Recurring selects one recurring group by id, or one of AnyRecurring,
+	// ActiveRecurring and InactiveRecurring.
+	Recurring int64
+	Limit     int
+	Offset    int
 }
 
 // TxPage is one page of a filtered list with totals over the whole filter.
@@ -54,14 +74,17 @@ const txViewFrom = `
 	JOIN accounts ac ON ac.id = t.account_id
 	LEFT JOIN allocations al ON al.transaction_id = t.id AND al.source <> 'suggested'
 	LEFT JOIN categories c ON c.id = al.category_id
-	LEFT JOIN categories p ON p.id = c.parent_id`
+	LEFT JOIN categories p ON p.id = c.parent_id
+	LEFT JOIN recurring_groups rg ON rg.id = t.recurring_group_id`
 
 const txViewColumns = `
 	t.id, t.booking_date, COALESCE(t.purchase_date, ''), ac.slug, ac.name,
-	COALESCE(t.counterparty, ''), COALESCE(t.purpose, ''), t.amount_cents, t.is_transfer,
+	COALESCE(t.counterparty, ''), COALESCE(t.purpose, ''), t.amount_cents, t.is_transfer, t.is_reserve,
 	COALESCE(c.id, 0),
 	CASE WHEN p.id IS NOT NULL THEN p.name || ' / ' || c.name ELSE COALESCE(c.name, '') END,
-	COALESCE(al.source, '')`
+	COALESCE(al.source, ''),
+	COALESCE(rg.id, 0), COALESCE(rg.name, ''), COALESCE(rg.active, 0),
+	COALESCE(rg.covers_reserve = 1 AND rg.active = 1, 0)`
 
 func (f TxFilter) where() (string, []any) {
 	var conds []string
@@ -91,6 +114,18 @@ func (f TxFilter) where() (string, []any) {
 		add("t.id IN (SELECT id FROM uncategorized)")
 	case StatusTransfer:
 		add("t.is_transfer = 1")
+	case StatusReserve:
+		add("(t.is_reserve = 1 OR (rg.covers_reserve = 1 AND rg.active = 1))")
+	}
+	switch {
+	case f.Recurring == AnyRecurring:
+		add("t.recurring_group_id IS NOT NULL")
+	case f.Recurring == ActiveRecurring:
+		add("rg.active = 1")
+	case f.Recurring == InactiveRecurring:
+		add("rg.active = 0")
+	case f.Recurring > 0:
+		add("t.recurring_group_id = ?", f.Recurring)
 	}
 	if len(conds) == 0 {
 		return "", args
@@ -141,8 +176,9 @@ func (s *Store) TxViewByID(ctx context.Context, id int64) (TxView, error) {
 func scanTxView(row scanner) (TxView, error) {
 	var v TxView
 	err := row.Scan(&v.ID, &v.BookingDate, &v.PurchaseDate, &v.AccountSlug, &v.AccountName,
-		&v.Counterparty, &v.Purpose, &v.AmountCents, &v.IsTransfer,
-		&v.CategoryID, &v.CategoryName, &v.CategorySource)
+		&v.Counterparty, &v.Purpose, &v.AmountCents, &v.IsTransfer, &v.IsReserve,
+		&v.CategoryID, &v.CategoryName, &v.CategorySource,
+		&v.RecurringID, &v.RecurringName, &v.RecurringActive, &v.ReserveViaGroup)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return TxView{}, err
@@ -266,8 +302,37 @@ func (s *Store) MainCategoryTotals(ctx context.Context, from, to string) ([]Cate
 	return totals, rows.Err()
 }
 
+// EarliestDate returns the booking date of the oldest transaction, or "" if
+// there are none.
+func (s *Store) EarliestDate(ctx context.Context) (string, error) {
+	return s.bookingDate(ctx, `SELECT min(booking_date) FROM transactions`)
+}
+
 // LatestDate returns the booking date of the newest transaction, or "" if
 // there are none.
 func (s *Store) LatestDate(ctx context.Context) (string, error) {
 	return s.bookingDate(ctx, `SELECT max(booking_date) FROM transactions`)
+}
+
+// ReserveTransactions returns the transactions that count as irregular
+// expenses, marked by hand or through their recurring group, with a booking
+// date after from and up to to (YYYY-MM-DD), oldest first.
+func (s *Store) ReserveTransactions(ctx context.Context, from, to string) ([]TxView, error) {
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT`+txViewColumns+txViewFrom+`
+		WHERE (t.is_reserve = 1 OR (rg.covers_reserve = 1 AND rg.active = 1)) AND t.booking_date > ? AND t.booking_date <= ?
+		ORDER BY t.booking_date, t.id`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("store: reserve transactions: %w", err)
+	}
+	defer rows.Close()
+	var out []TxView
+	for rows.Next() {
+		v, err := scanTxView(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }

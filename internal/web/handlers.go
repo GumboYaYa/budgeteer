@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/reserve"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
 
@@ -17,6 +19,15 @@ const (
 	inboxPageSize = 200
 	listPageSize  = 100
 	maxUploadSize = 64 << 20
+	// incomeAverageMonths is the number of months the overview averages the
+	// income over.
+	incomeAverageMonths = 6
+	// trendMinMonths is the least number of months in the overview's chart.
+	trendMinMonths = 12
+	// overviewMaxMonths limits the period the overview accepts.
+	overviewMaxMonths = 600
+
+	monthLayout = "2006-01"
 )
 
 // --- overview ---------------------------------------------------------------
@@ -28,28 +39,51 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	earliest, err := s.st.EarliestDate(ctx)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	if latest == "" {
 		latest = time.Now().Format(time.DateOnly)
+		earliest = latest
 	}
-	start, err := time.Parse("2006-01", r.URL.Query().Get("month"))
-	if err != nil {
-		start, _ = time.Parse("2006-01", latest[:7])
-	}
+	newest, _ := time.Parse(monthLayout, latest[:7])
+	oldest, _ := time.Parse(monthLayout, earliest[:7])
+	from, to := overviewRange(r.URL.Query(), newest)
+	months := monthsBetween(from, to)
 
 	d := overviewData{
-		Month: start.Format("2006-01"),
-		Label: start.Format("January 2006"),
-		Prev:  start.AddDate(0, -1, 0).Format("2006-01"),
-		Next:  start.AddDate(0, 1, 0).Format("2006-01"),
-		From:  start.Format(time.DateOnly),
-		To:    start.AddDate(0, 1, -1).Format(time.DateOnly),
+		FromMonth: from.Format(monthLayout),
+		ToMonth:   to.Format(monthLayout),
+		Months:    months,
+		Label:     rangeLabel(from, to),
+		Prev:      rangeURL(from.AddDate(0, -months, 0), to.AddDate(0, -months, 0)),
+		Next:      rangeURL(from.AddDate(0, months, 0), to.AddDate(0, months, 0)),
+		From:      from.Format(time.DateOnly),
+		To:        to.AddDate(0, 1, -1).Format(time.DateOnly),
+	}
+	// The shortcuts are counted back from the newest month with transactions.
+	for _, p := range []struct {
+		label string
+		from  time.Time
+	}{
+		{"Month", newest},
+		{"3 months", newest.AddDate(0, -2, 0)},
+		{"12 months", newest.AddDate(0, -11, 0)},
+		{newest.Format("2006"), time.Date(newest.Year(), time.January, 1, 0, 0, 0, 0, time.UTC)},
+		{"All", oldest},
+	} {
+		d.Presets = append(d.Presets, rangePreset{
+			Label: p.label, URL: rangeURL(p.from, newest), Active: p.from.Equal(from) && newest.Equal(to),
+		})
 	}
 	if d.Inbox, err = s.st.CountUncategorized(ctx); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	// Balances at the end of the month, or as of the newest transaction while
-	// the month is still running.
+	// Balances at the end of the period, or as of the newest transaction
+	// while its last month is still running.
 	d.BalanceDate = min(d.To, latest)
 	if d.Balances, err = s.st.AccountBalances(ctx, d.BalanceDate); err != nil {
 		s.fail(w, r, err)
@@ -62,28 +96,73 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	trend, err := s.st.MonthlyTotals(ctx, start.AddDate(0, -11, 0).Format("2006-01"), d.Month)
+
+	// The chart shows every month of the period, and at least twelve.
+	trendFrom := to.AddDate(0, 1-trendMinMonths, 0)
+	if from.Before(trendFrom) {
+		trendFrom = from
+	}
+	trend, err := s.st.MonthlyTotals(ctx, trendFrom.Format(monthLayout), d.ToMonth)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	// Months without transactions are missing from the query; the chart needs
-	// all twelve.
+	// Months without transactions are missing from the query.
 	byMonth := make(map[string]store.MonthTotal, len(trend))
 	for _, m := range trend {
 		byMonth[m.Month] = m
 	}
-	for i := -11; i <= 0; i++ {
-		key := start.AddDate(0, i, 0).Format("2006-01")
-		m := byMonth[key]
-		m.Month = key
+	for month := trendFrom; !month.After(to); month = month.AddDate(0, 1, 0) {
+		m := byMonth[month.Format(monthLayout)]
+		m.Month = month.Format(monthLayout)
 		d.Trend = append(d.Trend, m)
 	}
-	current := d.Trend[len(d.Trend)-1]
-	d.Income, d.Spending = current.IncomeCents, current.SpendingCents
+	for _, m := range d.Trend[len(d.Trend)-months:] {
+		d.Income += m.IncomeCents
+		d.Spending += m.SpendingCents
+	}
+	// Next to the income: for one month the average of the six months before
+	// it, for a longer period its own monthly average.
+	if months == 1 {
+		var sum int64
+		before := d.Trend[:len(d.Trend)-1]
+		for _, m := range before[len(before)-incomeAverageMonths:] {
+			sum += m.IncomeCents
+		}
+		d.IncomeAverage = roundDiv(sum, incomeAverageMonths)
+		d.IncomeAverageNote = "over the " + strconv.Itoa(incomeAverageMonths) + " months before"
+	} else {
+		d.IncomeAverage = roundDiv(d.Income, int64(months))
+		d.IncomeAverageNote = "per month"
+	}
 	d.Chart = buildCharts(d)
 
 	s.render(w, r, overviewPage(d))
+}
+
+// overviewRange reads the months to show: ?month= for a single one, or ?from=
+// and ?to=. Without a valid month it is the newest one with transactions.
+func overviewRange(q url.Values, newest time.Time) (from, to time.Time) {
+	if month, err := time.Parse(monthLayout, q.Get("month")); err == nil {
+		return month, month
+	}
+	from, errFrom := time.Parse(monthLayout, q.Get("from"))
+	to, errTo := time.Parse(monthLayout, q.Get("to"))
+	switch {
+	case errFrom != nil && errTo != nil:
+		return newest, newest
+	case errFrom != nil:
+		from = to
+	case errTo != nil:
+		to = from
+	}
+	if from.After(to) {
+		from, to = to, from
+	}
+	if monthsBetween(from, to) > overviewMaxMonths {
+		from = to.AddDate(0, 1-overviewMaxMonths, 0)
+	}
+	return from, to
 }
 
 // --- inbox and transaction list ---------------------------------------------
@@ -100,7 +179,12 @@ func (s *server) inbox(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, inboxPage(inboxData{Page: page, Picker: picker}))
+	groups, err := s.st.ListRecurringGroups(ctx)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, inboxPage(inboxData{Page: page, Picker: picker, Groups: groups}))
 }
 
 func (s *server) transactions(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +202,11 @@ func (s *server) transactions(w http.ResponseWriter, r *http.Request) {
 		PageNo: 1,
 	}
 	d.Filter.CategoryID, _ = strconv.ParseInt(q.Get("category"), 10, 64)
+	if named, ok := recurringFilters[q.Get("recurring")]; ok {
+		d.Filter.Recurring = named
+	} else if id, err := strconv.ParseInt(q.Get("recurring"), 10, 64); err == nil && id > 0 {
+		d.Filter.Recurring = id
+	}
 	if n, err := strconv.Atoi(q.Get("page")); err == nil && n > 1 {
 		d.PageNo = n
 	}
@@ -166,6 +255,10 @@ func (s *server) transactions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.Categories, err = s.st.ListCategories(ctx); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if d.Groups, err = s.st.ListRecurringGroups(ctx); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -224,16 +317,21 @@ func (s *server) respondRows(w http.ResponseWriter, r *http.Request, txIDs []int
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.renderRows(w, r, txIDs, true)
+}
+
+// renderRows answers with the current markup of the given transactions.
+func (s *server) renderRows(w http.ResponseWriter, r *http.Request, txIDs []int64, withCategory bool) {
 	rows := make([]store.TxView, 0, len(txIDs))
 	for _, id := range txIDs {
-		v, err := s.st.TxViewByID(ctx, id)
+		v, err := s.st.TxViewByID(r.Context(), id)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 		rows = append(rows, v)
 	}
-	s.render(w, r, txRows(rows, true))
+	s.render(w, r, txRows(rows, withCategory))
 }
 
 func (s *server) categorize(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +414,215 @@ func (s *server) undo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondRows(w, r, txIDs)
+}
+
+// reserveMark marks or unmarks transactions as irregular expenses. The rows
+// stay where they are, also in the inbox, so the fresh rows are sent back for
+// both views.
+func (s *server) reserveMark(w http.ResponseWriter, r *http.Request) {
+	txIDs, err := ids(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	value := r.PostFormValue("value") == "1"
+	err = s.st.InTx(r.Context(), func(tx *store.Store) error {
+		for _, id := range txIDs {
+			if err := tx.SetReserve(r.Context(), id, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.renderRows(w, r, txIDs, r.PostFormValue("view") == "list")
+}
+
+// recurringAssign puts transactions into a recurring group: the one with
+// group_id, or the one called name, which is created if needed. group_id 0
+// takes them out of their group. The rows stay in place and come back fresh.
+func (s *server) recurringAssign(w http.ResponseWriter, r *http.Request) {
+	txIDs, err := ids(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var groupID int64
+	err = s.st.InTx(r.Context(), func(tx *store.Store) error {
+		if name := strings.TrimSpace(r.PostFormValue("name")); name != "" {
+			if groupID, err = tx.EnsureRecurringGroup(r.Context(), name); err != nil {
+				return err
+			}
+		} else if groupID, err = formID(r, "group_id"); err != nil {
+			return err
+		}
+		for _, id := range txIDs {
+			if err := tx.SetRecurringGroup(r.Context(), id, groupID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	w.Header().Set("X-Group-Id", strconv.FormatInt(groupID, 10))
+	s.renderRows(w, r, txIDs, r.PostFormValue("view") == "list")
+}
+
+// --- recurring groups -------------------------------------------------------
+
+func (s *server) recurringData(r *http.Request, problem string) (recurringData, error) {
+	ctx := r.Context()
+	d := recurringData{Error: problem}
+	var err error
+	if d.Groups, err = s.st.ListRecurringGroups(ctx); err != nil {
+		return d, err
+	}
+	if d.AsOf, err = s.st.LatestDate(ctx); err != nil {
+		return d, err
+	}
+	for _, g := range d.Groups {
+		switch cents, ok := g.MonthlyCents(); {
+		case ok:
+			d.MonthlyCents += cents
+		case !g.Active:
+			d.Inactive++
+		case g.Count > 0:
+			d.Unknown++
+		}
+	}
+	d.Inbox, err = s.st.CountUncategorized(ctx)
+	return d, err
+}
+
+func (s *server) recurring(w http.ResponseWriter, r *http.Request) {
+	d, err := s.recurringData(r, "")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, recurringPage(d))
+}
+
+// recurringAction runs a change on the group in the path (0 if the path has
+// none) and re-renders the group list, with the error shown above it if the
+// change was refused.
+func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change func(id int64) error) {
+	problem := ""
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err := change(id); err != nil {
+		var bad badRequest
+		if errors.Is(err, store.ErrNotFound) {
+			problem = "That group no longer exists."
+		} else if errors.As(err, &bad) || !isInternal(err) {
+			problem = err.Error()
+		} else {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	d, err := s.recurringData(r, problem)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, recurringSection(d))
+}
+
+func (s *server) recurringCreate(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(int64) error {
+		id, err := s.st.EnsureRecurringGroup(r.Context(), r.FormValue("name"))
+		if err != nil {
+			return err
+		}
+		return s.st.SetRecurringInterval(r.Context(), id, r.FormValue("interval"))
+	})
+}
+
+func (s *server) recurringRename(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.RenameRecurringGroup(r.Context(), id, r.FormValue("name"))
+	})
+}
+
+func (s *server) recurringInterval(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringInterval(r.Context(), id, r.FormValue("interval"))
+	})
+}
+
+func (s *server) recurringReserve(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringReserve(r.Context(), id, r.FormValue("value") == "1")
+	})
+}
+
+func (s *server) recurringActive(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringActive(r.Context(), id, r.FormValue("value") == "1")
+	})
+}
+
+func (s *server) recurringMerge(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		intoID, err := formID(r, "into_id")
+		if err != nil {
+			return badRequestf("choose the group to merge into")
+		}
+		return s.st.MergeRecurringGroup(r.Context(), id, intoID)
+	})
+}
+
+func (s *server) recurringDelete(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.DeleteRecurringGroup(r.Context(), id)
+	})
+}
+
+// --- reserve ----------------------------------------------------------------
+
+func (s *server) reservePage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var d reserveData
+	var err error
+	if d.Status, err = reserve.Load(ctx, s.st); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if d.Accounts, err = s.st.ListAccounts(ctx); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if d.Inbox, err = s.st.CountUncategorized(ctx); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, reservePage(d))
+}
+
+// reserveAccount chooses the account that holds the reserve; an empty slug
+// means none.
+func (s *server) reserveAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var id int64
+	if slug := r.PostFormValue("account"); slug != "" {
+		a, err := s.st.AccountBySlug(ctx, slug)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		id = a.ID
+	}
+	if err := s.st.SetReserveAccount(ctx, id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/reserve", http.StatusSeeOther)
 }
 
 // --- import -----------------------------------------------------------------

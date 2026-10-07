@@ -10,9 +10,6 @@
   const help = document.getElementById("help");
   if (!picker) return; // not a page with a transaction table
 
-  const pickerInput = document.getElementById("picker-input");
-  const pickerList = document.getElementById("picker-list");
-  const pickerEmpty = document.getElementById("picker-empty");
   const undoStack = [];
 
   const table = () => document.querySelector("[data-tx-table]");
@@ -36,10 +33,22 @@
     focusRow(all[next]);
   }
 
+  // The checkbox in the table head reflects the rows: checked when all are
+  // selected, in between when only some are.
+  function syncSelectAll() {
+    const all = document.querySelector(".tx-check-all");
+    if (!all) return;
+    const total = rows().length;
+    const count = selected().length;
+    all.checked = total > 0 && count === total;
+    all.indeterminate = count > 0 && count < total;
+  }
+
   function setSelected(row, on) {
     row.classList.toggle("tx-selected", on);
     const box = row.querySelector(".tx-check");
     if (box) box.checked = on;
+    syncSelectAll();
   }
 
   // The rows an action applies to: the selection, or else the focused row.
@@ -107,15 +116,17 @@
   }
 
   // In the transaction list, rows stay and are replaced by fresh markup.
-  async function replaceRows(response) {
+  async function replaceRows(response, keepSelection) {
     const holder = document.createElement("template");
     holder.innerHTML = "<table><tbody>" + (await response.text()) + "</tbody></table>";
     holder.content.querySelectorAll("tr.tx-row").forEach((fresh) => {
       const old = document.getElementById(fresh.id);
       if (!old) return;
       if (old.classList.contains("tx-focus")) fresh.classList.add("tx-focus");
+      if (keepSelection && old.classList.contains("tx-selected")) setSelected(fresh, true);
       old.replaceWith(fresh);
     });
+    syncSelectAll();
   }
 
   async function act(url, fields, kind) {
@@ -142,6 +153,20 @@
     return act("/api/transfer", { value }, "transfer");
   }
 
+  // Marks irregular expenses for the reserve. The rows stay in place, in the
+  // inbox too, and keep their selection so they can be categorized next.
+  async function toggleReserve() {
+    const targetRows = targets();
+    if (targetRows.length === 0) return;
+    // The first target decides the direction for all of them.
+    const value = targetRows[0].dataset.reserve === undefined ? "1" : "0";
+    try {
+      await replaceRows(await post("/api/reserve", targetRows, { value }), true);
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
   async function undo() {
     const entry = undoStack.pop();
     if (!entry) return;
@@ -161,84 +186,143 @@
     focusRow(entry.items[0].row);
   }
 
-  // --- category picker -------------------------------------------------------
+  // --- pickers ---------------------------------------------------------------
 
-  const pickerItems = () => Array.from(pickerList.querySelectorAll(".picker-item"));
-  const visibleItems = () => pickerItems().filter((i) => !i.hidden);
+  // A picker is a dialog with a search field and a list of entries; onChoose
+  // gets the chosen entry. A list may end with a "create" entry, which stands
+  // for a new entry named like the search text and shows up only when no
+  // entry has that name yet.
+  function makePicker(dialog, onChoose) {
+    const input = dialog.querySelector("input");
+    const list = dialog.querySelector("ul");
+    const empty = dialog.querySelector(".picker-empty");
+    const create = list.querySelector("[data-create]");
+    const items = () => Array.from(list.querySelectorAll(".picker-item"));
+    const visibleItems = () => items().filter((i) => !i.hidden);
 
-  function activate(item) {
-    pickerItems().forEach((i) => i.classList.remove("picker-active"));
-    if (!item) return;
-    item.classList.add("picker-active");
-    item.scrollIntoView({ block: "nearest" });
-  }
-
-  // Every word of the query must occur in the category's name or key.
-  function filterPicker() {
-    const words = pickerInput.value.toLowerCase().split(/\s+/).filter(Boolean);
-    pickerItems().forEach((item) => {
-      const hay = item.dataset.search.toLowerCase();
-      item.hidden = !words.every((w) => hay.includes(w));
-    });
-    const visible = visibleItems();
-    pickerEmpty.classList.toggle("hidden", visible.length > 0);
-    activate(visible[0]);
-  }
-
-  function openPicker() {
-    if (targets().length === 0) return;
-    pickerInput.value = "";
-    filterPicker();
-    picker.showModal();
-    pickerInput.focus();
-  }
-
-  function choose(item) {
-    if (!item) return;
-    picker.close();
-    pickerInput.blur();
-    pickerList.prepend(item); // most recently used first next time
-    categorize(item.dataset.id);
-  }
-
-  pickerInput.addEventListener("input", filterPicker);
-  pickerInput.addEventListener("keydown", (e) => {
-    const visible = visibleItems();
-    const i = visible.findIndex((v) => v.classList.contains("picker-active"));
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      activate(visible[Math.min(visible.length - 1, i + 1)]);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      activate(visible[Math.max(0, i - 1)]);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      // Closing the picker here must not let the same key press reach the
-      // page shortcuts, where Enter would open it again.
-      e.stopPropagation();
-      choose(visible[i]);
+    function activate(item) {
+      items().forEach((i) => i.classList.remove("picker-active"));
+      if (!item) return;
+      item.classList.add("picker-active");
+      item.scrollIntoView({ block: "nearest" });
     }
+
+    // Every word of the query must occur in the entry's search text.
+    function filter() {
+      const query = input.value.trim();
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      items().forEach((item) => {
+        if (item === create) return;
+        const hay = item.dataset.search.toLowerCase();
+        item.hidden = !words.every((w) => hay.includes(w));
+      });
+      if (create) {
+        const taken = items().some((i) => i !== create && (i.dataset.name || "").toLowerCase() === query.toLowerCase());
+        create.hidden = query === "" || taken;
+        create.dataset.name = query;
+        create.querySelector("[data-create-name]").textContent = query;
+      }
+      const visible = visibleItems();
+      if (empty) empty.classList.toggle("hidden", visible.length > 0);
+      activate(visible[0]);
+    }
+
+    function open() {
+      if (targets().length === 0) return;
+      input.value = "";
+      filter();
+      dialog.showModal();
+      input.focus();
+    }
+
+    function choose(item) {
+      if (!item) return;
+      dialog.close();
+      input.blur();
+      onChoose(item, list, create);
+    }
+
+    input.addEventListener("input", filter);
+    input.addEventListener("keydown", (e) => {
+      const visible = visibleItems();
+      const i = visible.findIndex((v) => v.classList.contains("picker-active"));
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activate(visible[Math.min(visible.length - 1, i + 1)]);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activate(visible[Math.max(0, i - 1)]);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        // Closing the picker here must not let the same key press reach the
+        // page shortcuts, where Enter would open the category picker.
+        e.stopPropagation();
+        choose(visible[i]);
+      }
+    });
+    list.addEventListener("click", (e) => choose(e.target.closest(".picker-item")));
+    return { open };
+  }
+
+  const categoryPicker = makePicker(picker, (item, list) => {
+    list.prepend(item); // most recently used first next time
+    categorize(item.dataset.id);
   });
-  pickerList.addEventListener("click", (e) => choose(e.target.closest(".picker-item")));
+
+  // Puts the target rows into a recurring group, takes them out of theirs
+  // (the entry with id 0), or creates the group typed into the search field.
+  async function assignGroup(item, list, create) {
+    const targetRows = targets();
+    if (targetRows.length === 0) return;
+    const creating = item === create;
+    const name = item.dataset.name;
+    try {
+      const fields = creating ? { name } : { group_id: item.dataset.id };
+      const response = await post("/api/recurring", targetRows, fields);
+      await replaceRows(response, true);
+      if (!creating) return;
+      // Offer the new group next time without reloading the page.
+      const entry = document.createElement("li");
+      entry.className = "picker-item";
+      entry.setAttribute("role", "option");
+      entry.dataset.id = response.headers.get("X-Group-Id");
+      entry.dataset.name = name;
+      entry.dataset.search = name;
+      const label = document.createElement("span");
+      label.textContent = name;
+      entry.append(label);
+      list.prepend(entry);
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  const groupDialog = document.getElementById("group-picker");
+  const groupPicker = groupDialog ? makePicker(groupDialog, assignGroup) : null;
 
   // --- mouse and keyboard ----------------------------------------------------
 
   document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("tx-check-all")) {
+      const on = e.target.checked;
+      rows().forEach((r) => setSelected(r, on));
+      return;
+    }
     const row = e.target.closest("tr.tx-row");
     if (!row) return;
     focusRow(row);
     if (e.target.classList.contains("tx-check")) setSelected(row, e.target.checked);
   });
   document.addEventListener("dblclick", (e) => {
-    if (e.target.closest("tr.tx-row")) openPicker();
+    if (e.target.closest("tr.tx-row")) categoryPicker.open();
   });
 
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (picker.open || (help && help.open)) return;
+    if (document.querySelector("dialog[open]")) return;
     const tag = e.target.tagName;
-    if (tag === "INPUT" && e.target.classList.contains("tx-check")) {
-      // the row checkbox must not swallow shortcuts
+    if (tag === "INPUT" && (e.target.classList.contains("tx-check") || e.target.classList.contains("tx-check-all"))) {
+      // the checkboxes must not swallow shortcuts
     } else if (e.target.closest("dialog:not([open])")) {
       // focus can linger on the picker's input right after it closed
     } else if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || tag === "BUTTON" || tag === "A") {
@@ -257,7 +341,10 @@
         break;
       case "c":
       case "Enter":
-        openPicker();
+        categoryPicker.open();
+        break;
+      case "g":
+        if (groupPicker) groupPicker.open();
         break;
       case "x": {
         const f = focused();
@@ -266,6 +353,9 @@
       }
       case "t":
         toggleTransfer();
+        break;
+      case "r":
+        toggleReserve();
         break;
       case "u":
         if (view() === "inbox") undo();

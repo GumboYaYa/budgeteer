@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/GumboYaYa/budgeteer/internal/money"
+	"github.com/GumboYaYa/budgeteer/internal/reserve"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
 
@@ -16,6 +18,48 @@ type pickerItem struct {
 type inboxData struct {
 	Page   store.TxPage
 	Picker []pickerItem
+	Groups []store.RecurringGroup
+}
+
+type recurringData struct {
+	Groups []store.RecurringGroup
+	// MonthlyCents sums what the active groups cost per month; Unknown
+	// counts the active groups left out because their interval is not known,
+	// Inactive the groups that have ended.
+	MonthlyCents int64
+	Unknown      int
+	Inactive     int
+	// AsOf is the newest booking date; groups without a payment for long
+	// before it are pointed out.
+	AsOf  string
+	Error string
+	Inbox int
+}
+
+// intervalLabel names an interval for the UI.
+func intervalLabel(interval string) string {
+	switch interval {
+	case store.IntervalMonthly:
+		return "Monthly"
+	case store.IntervalQuarterly:
+		return "Quarterly"
+	case store.IntervalHalfYearly:
+		return "Half-yearly"
+	case store.IntervalYearly:
+		return "Yearly"
+	}
+	return "Not known"
+}
+
+// Values of the list's "recurring" filter besides a group id.
+const (
+	recurringAny      = "any"
+	recurringActive   = "active"
+	recurringInactive = "inactive"
+)
+
+var recurringFilters = map[string]int64{
+	recurringAny: store.AnyRecurring, recurringActive: store.ActiveRecurring, recurringInactive: store.InactiveRecurring,
 }
 
 type listData struct {
@@ -27,18 +71,26 @@ type listData struct {
 	NextURL    string
 	Accounts   []store.Account
 	Categories []store.Category
+	Groups     []store.RecurringGroup
 	Picker     []pickerItem
 	Inbox      int
 }
 
 type overviewData struct {
-	Month      string // YYYY-MM
-	Label      string // "September 2026"
-	Prev, Next string
-	From, To   string
-	Income     int64
-	Spending   int64 // negative
-	Inbox      int
+	// The period shown: whole months, FromMonth to ToMonth inclusive.
+	FromMonth, ToMonth string // YYYY-MM
+	Months             int
+	Label              string // "September 2026" or "July – September 2026"
+	Prev, Next         string // URLs of the periods of the same length before and after
+	Presets            []rangePreset
+	From, To           string // first and last day
+	Income             int64
+	Spending           int64 // negative
+	// IncomeAverage is a monthly average shown next to the income;
+	// IncomeAverageNote says over which months.
+	IncomeAverage     int64
+	IncomeAverageNote string
+	Inbox             int
 	// Account balances at the end of BalanceDate.
 	Balances     []store.AccountBalance
 	BalanceTotal int64
@@ -48,11 +100,103 @@ type overviewData struct {
 	Chart        chartData
 }
 
+// rangePreset is a shortcut to a period of the overview.
+type rangePreset struct {
+	Label  string
+	URL    string
+	Active bool
+}
+
+// periodNote is the line below a figure of the overview.
+func (d overviewData) periodNote() string {
+	if d.Months == 1 {
+		return "this month"
+	}
+	return "in these " + strconv.Itoa(d.Months) + " months"
+}
+
+// monthsBetween counts the months from one month to another, both included.
+func monthsBetween(from, to time.Time) int {
+	return (to.Year()-from.Year())*12 + int(to.Month()) - int(from.Month()) + 1
+}
+
+// rangeLabel names a period of whole months.
+func rangeLabel(from, to time.Time) string {
+	switch {
+	case from.Equal(to):
+		return to.Format("January 2006")
+	case from.Year() == to.Year():
+		return from.Format("January") + " – " + to.Format("January 2006")
+	default:
+		return from.Format("January 2006") + " – " + to.Format("January 2006")
+	}
+}
+
+// rangeURL links to the overview of a period.
+func rangeURL(from, to time.Time) string {
+	if from.Equal(to) {
+		return "/?month=" + to.Format(monthLayout)
+	}
+	return "/?from=" + from.Format(monthLayout) + "&to=" + to.Format(monthLayout)
+}
+
+// roundDiv divides rounding to the nearest; b must be positive.
+func roundDiv(a, b int64) int64 {
+	if a < 0 {
+		return -((-a + b/2) / b)
+	}
+	return (a + b/2) / b
+}
+
 type categoriesData struct {
 	Categories []store.Category
 	Mains      []store.Category
 	Error      string
 	Inbox      int
+}
+
+type reserveData struct {
+	reserve.Status
+	Accounts []store.Account
+	Inbox    int
+}
+
+// monthlyNote explains the monthly amount below its figure.
+func (d reserveData) monthlyNote() string {
+	switch {
+	case len(d.Items) == 0:
+		return "nothing marked yet"
+	case d.CatchUpMonths == 0:
+		return "a twelfth of the bills of a year"
+	case d.CatchUpMonths == 1:
+		return "this month, to cover the next bill"
+	default:
+		return "for " + strconv.Itoa(d.CatchUpMonths) + " months, to cover the bills due until then"
+	}
+}
+
+// savedNote says where the saved amount comes from.
+func (d reserveData) savedNote() string {
+	switch {
+	case !d.HasAccount:
+		return "no reserve account chosen"
+	case !d.BalanceKnown:
+		return "balance of " + d.Account.Name + " is not known"
+	default:
+		return d.Account.Name + " on " + dateDE(d.AsOf)
+	}
+}
+
+// targetNote compares the saved amount with the target.
+func (d reserveData) targetNote() string {
+	switch diff := d.SavedCents - d.TargetCents; {
+	case diff > 0:
+		return money.FormatDE(diff) + " ahead"
+	case diff < 0:
+		return money.FormatDE(-diff) + " behind"
+	default:
+		return "on target"
+	}
 }
 
 // chartData is handed to the browser as JSON. Values are euros and for

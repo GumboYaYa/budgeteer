@@ -7,14 +7,26 @@ import (
 )
 
 // txRow is one transaction line. The script in app.js works on these rows:
-// it reads data-id and data-transfer and moves focus between them.
+// it reads data-id, data-transfer and data-reserve and moves focus between
+// them.
 templ txRow(v store.TxView, withCategory bool) {
-	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-transfer?={ v.IsTransfer }>
+	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-transfer?={ v.IsTransfer } data-reserve?={ v.IsReserve }>
 		<td class="w-8"><input type="checkbox" class="checkbox checkbox-xs tx-check" tabindex="-1" aria-label="Select transaction"/></td>
 		<td class="whitespace-nowrap tabular-nums">{ dateDE(v.BookingDate) }</td>
 		<td class="whitespace-nowrap text-base-content/70">{ v.AccountName }</td>
-		<td class="font-medium max-w-56 truncate" title={ v.Counterparty }>{ v.Counterparty }</td>
-		<td class="max-w-md truncate text-base-content/70" title={ v.Purpose }>{ v.Purpose }</td>
+		<td class="font-medium max-w-56 truncate" title={ v.Counterparty }>
+			if v.RecurringID != 0 {
+				if v.RecurringActive {
+					<span class="mr-1 font-normal text-base-content/50" title={ "Recurring: " + v.RecurringName } aria-label={ "Recurring: " + v.RecurringName }>↻</span>
+				} else {
+					<span class="mr-1 font-normal text-base-content/30" title={ "Recurring, ended: " + v.RecurringName } aria-label={ "Recurring, ended: " + v.RecurringName }>↻</span>
+				}
+			}
+			{ v.Counterparty }
+		</td>
+		// The purpose takes the width the other columns leave and is cut off
+		// there, so the table never gets wider than the page because of it.
+		<td class="w-full min-w-40 max-w-0 truncate text-base-content/70" title={ v.Purpose }>{ v.Purpose }</td>
 		if withCategory {
 			<td class="whitespace-nowrap">
 				if v.IsTransfer {
@@ -28,6 +40,11 @@ templ txRow(v store.TxView, withCategory bool) {
 			</td>
 		}
 		<td class="text-right whitespace-nowrap tabular-nums font-medium">
+			if v.IsReserve {
+				<span class="badge badge-sm badge-info badge-soft mr-2 font-normal" title="Irregular expense, covered by the reserve">Reserve</span>
+			} else if v.ReserveViaGroup {
+				<span class="badge badge-sm badge-info badge-soft mr-2 font-normal" title={ "Covered by the reserve through its recurring group " + v.RecurringName }>Reserve</span>
+			}
 			if v.AmountCents > 0 {
 				<span class="text-success">+{ money.FormatDE(v.AmountCents) }</span>
 			} else {
@@ -48,7 +65,11 @@ templ txTable(rows []store.TxView, view string, more bool) {
 		<table class="table table-sm" data-tx-table data-view={ view } data-more?={ more }>
 			<thead>
 				<tr>
-					<th></th>
+					<th class="w-8">
+						if view == "list" {
+							<input type="checkbox" class="checkbox checkbox-xs tx-check-all" tabindex="-1" aria-label="Select all transactions on this page"/>
+						}
+					</th>
 					<th>Date</th>
 					<th>Account</th>
 					<th>Counterparty</th>
@@ -83,7 +104,40 @@ templ categoryPicker(items []pickerItem) {
 					</li>
 				}
 			</ul>
-			<p id="picker-empty" class="hidden p-4 text-sm text-base-content/60">No category matches. Add categories on the Categories page.</p>
+			<p id="picker-empty" class="picker-empty hidden p-4 text-sm text-base-content/60">No category matches. Add categories on the Categories page.</p>
+			<div class="px-3 py-2 border-t border-base-300 text-xs text-base-content/60">
+				<kbd class="kbd kbd-xs">↑</kbd> <kbd class="kbd kbd-xs">↓</kbd> choose · <kbd class="kbd kbd-xs">Enter</kbd> assign · <kbd class="kbd kbd-xs">Esc</kbd> cancel
+			</div>
+		</div>
+		<form method="dialog" class="modal-backdrop"><button tabindex="-1">close</button></form>
+	</dialog>
+}
+
+// groupPicker is the dialog used to put transactions into a recurring group.
+// Its last two entries take them out of their group and create the group
+// typed into the search field.
+templ groupPicker(groups []store.RecurringGroup) {
+	<dialog id="group-picker" class="modal modal-top">
+		<div class="modal-box mt-16 mx-auto max-w-xl p-0">
+			<div class="p-3 border-b border-base-300">
+				<input type="text" class="input w-full" placeholder="Type to find a recurring group, or the name of a new one…" autocomplete="off" spellcheck="false" aria-label="Find or name a recurring group"/>
+			</div>
+			<ul class="max-h-96 overflow-y-auto p-2" role="listbox">
+				for _, g := range groups {
+					<li class="picker-item" role="option" data-id={ itoa(g.ID) } data-name={ g.Name } data-search={ g.Name }>
+						<span class={ templ.KV("text-base-content/60", !g.Active) }>{ g.Name }</span>
+						if !g.Active {
+							<span class="badge badge-xs badge-ghost">inactive</span>
+						}
+					</li>
+				}
+				<li class="picker-item" role="option" data-id="0" data-search="no group none remove">
+					<span class="text-base-content/60">No group (take out of its group)</span>
+				</li>
+				<li class="picker-item" role="option" data-create data-search="" hidden>
+					<span>Create group “<span data-create-name></span>”</span>
+				</li>
+			</ul>
 			<div class="px-3 py-2 border-t border-base-300 text-xs text-base-content/60">
 				<kbd class="kbd kbd-xs">↑</kbd> <kbd class="kbd kbd-xs">↓</kbd> choose · <kbd class="kbd kbd-xs">Enter</kbd> assign · <kbd class="kbd kbd-xs">Esc</kbd> cancel
 			</div>
@@ -96,28 +150,46 @@ templ keyboardHelp(inbox bool) {
 	<dialog id="help" class="modal">
 		<div class="modal-box">
 			<h2 class="text-lg font-semibold mb-3">Keyboard shortcuts</h2>
-			<table class="table table-sm">
-				<tbody>
-					<tr><td><kbd class="kbd kbd-sm">j</kbd> <kbd class="kbd kbd-sm">k</kbd></td><td>Next / previous transaction (arrow keys work too)</td></tr>
-					<tr><td><kbd class="kbd kbd-sm">c</kbd> or <kbd class="kbd kbd-sm">Enter</kbd></td><td>Choose a category</td></tr>
-					<tr><td><kbd class="kbd kbd-sm">x</kbd></td><td>Select or unselect; actions then apply to all selected</td></tr>
-					<tr><td><kbd class="kbd kbd-sm">t</kbd></td><td>
-						if inbox {
-							Mark as transfer between own accounts
-						} else {
-							Mark or unmark as transfer between own accounts
-						}
-					</td></tr>
-					if inbox {
-						<tr><td><kbd class="kbd kbd-sm">u</kbd></td><td>Undo the last action</td></tr>
-					}
-					<tr><td><kbd class="kbd kbd-sm">Esc</kbd></td><td>Clear the selection</td></tr>
-					<tr><td><kbd class="kbd kbd-sm">?</kbd></td><td>Show this help</td></tr>
-				</tbody>
-			</table>
+			if inbox {
+				@shortcutTable("inbox")
+			} else {
+				@shortcutTable("transactions")
+			}
 		</div>
 		<form method="dialog" class="modal-backdrop"><button tabindex="-1">close</button></form>
 	</dialog>
+}
+
+// shortcutTable lists the keys of the transaction tables. page is "inbox" or
+// "transactions" for the keys of that page; anything else lists all of them
+// and says where a key is limited to one page.
+templ shortcutTable(page string) {
+	<table class="table table-sm">
+		<tbody>
+			<tr><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">j</kbd> <kbd class="kbd kbd-sm">k</kbd></td><td>Next / previous transaction (arrow keys work too)</td></tr>
+			<tr><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">c</kbd> or <kbd class="kbd kbd-sm">Enter</kbd></td><td>Choose a category</td></tr>
+			<tr><td><kbd class="kbd kbd-sm">x</kbd></td><td>Select or unselect; actions then apply to all selected</td></tr>
+			<tr><td><kbd class="kbd kbd-sm">t</kbd></td><td>
+				if page == "inbox" {
+					Mark as transfer between own accounts
+				} else {
+					Mark or unmark as transfer between own accounts
+				}
+			</td></tr>
+			<tr><td><kbd class="kbd kbd-sm">g</kbd></td><td>Put into a <a class="link" href="/recurring">recurring group</a>, or take out of it</td></tr>
+			<tr><td><kbd class="kbd kbd-sm">r</kbd></td><td>Mark or unmark as irregular expense for the <a class="link" href="/reserve">reserve</a></td></tr>
+			if page != "transactions" {
+				<tr><td><kbd class="kbd kbd-sm">u</kbd></td><td>
+					Undo the last action
+					if page != "inbox" {
+						(inbox only)
+					}
+				</td></tr>
+			}
+			<tr><td><kbd class="kbd kbd-sm">Esc</kbd></td><td>Clear the selection</td></tr>
+			<tr><td><kbd class="kbd kbd-sm">?</kbd></td><td>Show this list as a dialog</td></tr>
+		</tbody>
+	</table>
 }
 
 templ inboxPage(d inboxData) {
@@ -142,6 +214,7 @@ templ inboxPage(d inboxData) {
 		}
 		<div id="toast" class="toast toast-end hidden"><div class="alert alert-error"><span id="toast-text"></span></div></div>
 		@categoryPicker(d.Picker)
+		@groupPicker(d.Groups)
 		@keyboardHelp(true)
 	}
 }
@@ -186,6 +259,30 @@ templ listPage(d listData) {
 					<option value="">Any</option>
 					<option value={ store.StatusUncategorized } selected?={ d.Filter.Status == store.StatusUncategorized }>Uncategorized</option>
 					<option value={ store.StatusTransfer } selected?={ d.Filter.Status == store.StatusTransfer }>Transfers</option>
+					<option value={ store.StatusReserve } selected?={ d.Filter.Status == store.StatusReserve }>Reserve</option>
+				</select>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Recurring
+				<select name="recurring" class="select select-sm max-w-48">
+					<option value="">Any</option>
+					<option value={ recurringAny } selected?={ d.Filter.Recurring == store.AnyRecurring }>All recurring</option>
+					<option value={ recurringActive } selected?={ d.Filter.Recurring == store.ActiveRecurring }>Active only</option>
+					<option value={ recurringInactive } selected?={ d.Filter.Recurring == store.InactiveRecurring }>Inactive only</option>
+					<optgroup label="Active groups">
+						for _, g := range d.Groups {
+							if g.Active {
+								<option value={ itoa(g.ID) } selected?={ g.ID == d.Filter.Recurring }>{ g.Name }</option>
+							}
+						}
+					</optgroup>
+					<optgroup label="Inactive groups">
+						for _, g := range d.Groups {
+							if !g.Active {
+								<option value={ itoa(g.ID) } selected?={ g.ID == d.Filter.Recurring }>{ g.Name }</option>
+							}
+						}
+					</optgroup>
 				</select>
 			</label>
 			<label class="flex flex-col gap-1 text-xs">
@@ -203,6 +300,7 @@ templ listPage(d listData) {
 		</div>
 		<div id="toast" class="toast toast-end hidden"><div class="alert alert-error"><span id="toast-text"></span></div></div>
 		@categoryPicker(d.Picker)
+		@groupPicker(d.Groups)
 		@keyboardHelp(false)
 	}
 }
@@ -224,7 +322,7 @@ templ listResults(d listData) {
 templ listSummary(d listData, margin string) {
 	<div class={ "flex items-center justify-between text-sm text-base-content/70", margin }>
 		<p>
-			{ plural(d.Page.Total, "transaction", "transactions") } · sum of these { money.FormatDE(d.Page.SumCents) }
+			{ plural(d.Page.Total, "transaction", "transactions") } · { money.FormatDE(d.Page.SumCents) }
 		</p>
 		if d.Pages > 1 {
 			<div class="join">

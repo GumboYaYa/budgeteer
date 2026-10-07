@@ -14,15 +14,31 @@ templ overviewPage(d overviewData) {
 	@layout("Overview", "overview", d.Inbox) {
 		<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
 			<h1 class="text-2xl font-semibold">{ d.Label }</h1>
-			<form action="/" method="get" class="join">
-				<a class="join-item btn btn-sm" href={ templ.SafeURL("/?month=" + d.Prev) } aria-label="Previous month">‹</a>
-				<input type="month" name="month" value={ d.Month } class="join-item input input-sm" onchange="this.form.submit()" aria-label="Month"/>
-				<a class="join-item btn btn-sm" href={ templ.SafeURL("/?month=" + d.Next) } aria-label="Next month">›</a>
-			</form>
+			<div class="flex flex-wrap items-center gap-3">
+				<div class="join" role="group" aria-label="Period shortcuts">
+					for _, p := range d.Presets {
+						<a class={ "join-item btn btn-sm", templ.KV("btn-neutral", p.Active) } href={ templ.SafeURL(p.URL) } aria-current?={ p.Active }>{ p.Label }</a>
+					}
+				</div>
+				<form action="/" method="get" class="join items-center">
+					<a class="join-item btn btn-sm" href={ templ.SafeURL(d.Prev) } aria-label="Earlier period of the same length">‹</a>
+					<input type="month" name="from" value={ d.FromMonth } class="join-item input input-sm" onchange="this.form.submit()" aria-label="From month"/>
+					<span class="join-item btn btn-sm btn-disabled px-2" aria-hidden="true">–</span>
+					<input type="month" name="to" value={ d.ToMonth } class="join-item input input-sm" onchange="this.form.submit()" aria-label="To month"/>
+					<a class="join-item btn btn-sm" href={ templ.SafeURL(d.Next) } aria-label="Later period of the same length">›</a>
+				</form>
+			</div>
 		</div>
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-			@statTile("Income", money.FormatDE(d.Income), "this month")
-			@statTile("Spending", money.FormatDE(d.Spending), "this month")
+			<div class="bg-base-100 rounded-box border border-base-300 p-4">
+				<div class="text-sm text-base-content/60">Income</div>
+				<div class="flex flex-wrap items-baseline gap-x-3">
+					<span class="text-2xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{ money.FormatDE(d.Income) }</span>
+					<span class="text-xs text-base-content/60 tabular-nums">⌀ { money.FormatDE(d.IncomeAverage) } { d.IncomeAverageNote }</span>
+				</div>
+				<div class="text-xs text-base-content/60">{ d.periodNote() }</div>
+			</div>
+			@statTile("Spending", money.FormatDE(d.Spending), d.periodNote())
 			@statTile("Net", money.FormatDE(d.Income+d.Spending), "income minus spending")
 			<a href="/inbox" class="bg-base-100 rounded-box border border-base-300 p-4 hover:border-primary">
 				<div class="text-sm text-base-content/60">Inbox</div>
@@ -61,7 +77,7 @@ templ overviewPage(d overviewData) {
 				<section class="bg-base-100 rounded-box border border-base-300 p-4">
 					<h2 class="font-semibold mb-2">Spending by main category</h2>
 					if len(d.Chart.Spending.Labels) == 0 {
-						<p class="text-sm text-base-content/60">No spending this month.</p>
+						<p class="text-sm text-base-content/60">No spending in this period.</p>
 					} else {
 						<div class="chart-box" style={ "height:" + strconv.Itoa(40+28*len(d.Chart.Spending.Labels)) + "px" }>
 							<canvas id="chart-spending" role="img" aria-label={ "Bar chart of spending by main category in " + d.Label + ". The table next to it holds the same figures." }></canvas>
@@ -88,9 +104,9 @@ templ overviewPage(d overviewData) {
 			</div>
 		}
 		<section class="bg-base-100 rounded-box border border-base-300 p-4">
-			<h2 class="font-semibold mb-2">Income and spending, last 12 months</h2>
+			<h2 class="font-semibold mb-2">Income and spending per month</h2>
 			<div class="chart-box" style="height:280px">
-				<canvas id="chart-trend" role="img" aria-label="Bar chart of income and spending per month for the last twelve months. The table below holds the same figures."></canvas>
+				<canvas id="chart-trend" role="img" aria-label="Bar chart of income and spending per month. The table below holds the same figures."></canvas>
 			</div>
 			<details class="mt-3">
 				<summary class="text-sm cursor-pointer text-base-content/70">Show as table</summary>
@@ -233,6 +249,9 @@ templ importResult(s importer.Summary, problem string) {
 					if s.CategoriesCreated > 0 {
 						@summaryRow("Categories created", s.CategoriesCreated)
 					}
+					if s.GroupsCreated > 0 {
+						@summaryRow("Recurring groups created from contracts", s.GroupsCreated)
+					}
 				</tbody>
 			</table>
 			if len(s.AccountsCreated) > 0 {
@@ -328,6 +347,224 @@ templ categoriesSection(d categoriesData) {
 				</table>
 			</div>
 			<p class="text-xs text-base-content/60 mt-2">Renaming keeps the key. Moving changes it. A category with sub categories cannot be moved or merged until they are moved or merged first.</p>
+		}
+	</div>
+}
+
+templ reservePage(d reserveData) {
+	@layout("Reserve", "reserve", d.Inbox) {
+		<div class="flex flex-wrap items-baseline justify-between gap-3 mb-1">
+			<h1 class="text-2xl font-semibold">Reserve</h1>
+			<form action="/reserve/account" method="post" class="flex items-center gap-2 text-sm">
+				<label for="reserve-account">Reserve account</label>
+				<select id="reserve-account" name="account" class="select select-sm" onchange="this.form.submit()">
+					<option value="">None</option>
+					for _, a := range d.Accounts {
+						<option value={ a.Slug } selected?={ a.HoldsReserve }>{ a.Name }</option>
+					}
+				</select>
+				<noscript><button class="btn btn-sm">Save</button></noscript>
+			</form>
+		</div>
+		<p class="text-sm text-base-content/70 mb-4">
+			Money set aside every month for expenses that come only once or twice a year.
+			if d.AsOf != "" {
+				Calculated as of { dateDE(d.AsOf) }, the newest imported transaction.
+			}
+		</p>
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+			@statTile("Move each month", money.FormatDE(d.MonthlyCents), d.monthlyNote())
+			@statTile("Bills per year", money.FormatDE(d.YearlyCents), money.FormatDE(d.SteadyCents)+" per month")
+			@statTile("Saved", money.FormatDE(d.SavedCents), d.savedNote())
+			@statTile("Should be saved by now", money.FormatDE(d.TargetCents), d.targetNote())
+		</div>
+		if d.CatchUpMonths > 0 {
+			<p class="text-sm text-base-content/70 mb-4">
+				The reserve is behind: a bill comes due before { money.FormatDE(d.SteadyCents) } per month can cover it.
+				Once it is caught up, the amount goes back to { money.FormatDE(d.SteadyCents) }.
+			</p>
+		}
+		if len(d.Items) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center">
+				<p class="text-lg font-medium">No irregular expenses marked</p>
+				<p class="text-base-content/60 mt-1">
+					Press <kbd class="kbd kbd-xs">r</kbd> on a transaction in the <a class="link" href="/transactions">transaction list</a> or the <a class="link" href="/inbox">inbox</a> to mark a yearly or half-yearly bill.
+					Bills marked in the past twelve months are expected again one year later.
+				</p>
+			</div>
+		} else {
+			<section class="bg-base-100 rounded-box border border-base-300 p-4">
+				<div class="flex items-baseline justify-between mb-2">
+					<h2 class="font-semibold">Expected bills</h2>
+					<a class="link link-hover text-sm" href={ templ.SafeURL("/transactions?status=" + store.StatusReserve) }>All marked transactions</a>
+				</div>
+				<div class="overflow-x-auto">
+					<table class="table table-sm">
+						<thead>
+							<tr><th>Due</th><th>Last paid</th><th>Counterparty</th><th>Category</th><th class="text-right">Transfers left</th><th class="text-right">Amount</th></tr>
+						</thead>
+						<tbody>
+							for _, it := range d.Items {
+								<tr>
+									<td class="whitespace-nowrap tabular-nums">{ dateDE(it.DueOn) }</td>
+									<td class="whitespace-nowrap tabular-nums text-base-content/70">{ dateDE(it.PaidOn) }</td>
+									<td class="font-medium max-w-56 truncate" title={ it.Purpose }>{ it.Counterparty }</td>
+									<td class="text-base-content/70">{ it.Category }</td>
+									<td class="text-right tabular-nums">{ strconv.Itoa(it.MonthsLeft) }</td>
+									<td class="text-right whitespace-nowrap tabular-nums font-medium">{ money.FormatDE(it.Cents) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		}
+	}
+}
+
+templ recurringPage(d recurringData) {
+	@layout("Recurring", "recurring", d.Inbox) {
+		<h1 class="text-2xl font-semibold mb-1">Recurring</h1>
+		<p class="text-sm text-base-content/70 mb-3">
+			Groups of transactions that come back regularly: rent, subscriptions, insurances.
+			Press <kbd class="kbd kbd-xs">g</kbd> on a transaction in the <a class="link" href="/transactions">transaction list</a> or the <a class="link" href="/inbox">inbox</a> to put it into a group.
+			Contracts that Finanzguru detects become groups when a file is imported.
+		</p>
+		@recurringSection(d)
+	}
+}
+
+templ recurringSection(d recurringData) {
+	<div id="recurring">
+		if d.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
+		}
+		<form class="bg-base-100 rounded-box border border-base-300 p-3 mb-3 flex flex-wrap gap-3 items-end" hx-post="/recurring" hx-target="#recurring" hx-swap="outerHTML">
+			<label class="flex flex-col gap-1 text-xs">
+				New group
+				<input type="text" name="name" class="input input-sm w-56" placeholder="Name" required/>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Interval
+				<select name="interval" class="select select-sm">
+					<option value="">Not known</option>
+					for _, i := range store.Intervals {
+						<option value={ i }>{ intervalLabel(i) }</option>
+					}
+				</select>
+			</label>
+			<button class="btn btn-sm btn-primary">Add</button>
+			<p class="ml-auto text-sm text-base-content/70">
+				Per month in total: <span class="font-semibold tabular-nums text-base-content">{ money.FormatDE(d.MonthlyCents) }</span>
+				if d.Unknown > 0 {
+					· without { plural(d.Unknown, "group", "groups") } of unknown interval
+				}
+				if d.Inactive > 0 {
+					· { strconv.Itoa(d.Inactive) } inactive not counted
+				}
+			</p>
+		</form>
+		if len(d.Groups) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+				No recurring groups yet. They are created by the next Finanzguru import, or add one above.
+			</div>
+		} else {
+			<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Active</th><th>Name</th><th>Interval</th><th class="text-right">Transactions</th><th>Last</th>
+							<th class="text-right">Last amount</th><th class="text-right">Per month</th><th>Reserve</th><th>Merge into</th><th></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, g := range d.Groups {
+							<tr class={ templ.KV("opacity-60", !g.Active) }>
+								<td>
+									<input
+										type="checkbox"
+										name="value"
+										value="1"
+										class="toggle toggle-sm"
+										checked?={ g.Active }
+										aria-label={ g.Name + " is active" }
+										title="Switch off for a series that has ended. It keeps its transactions but no longer counts for the monthly cost or the reserve."
+										hx-post={ "/recurring/" + itoa(g.ID) + "/active" }
+										hx-target="#recurring"
+										hx-swap="outerHTML"
+									/>
+								</td>
+								<td>
+									<form class="join" hx-post={ "/recurring/" + itoa(g.ID) + "/rename" } hx-target="#recurring" hx-swap="outerHTML">
+										<input type="text" name="name" value={ g.Name } class="join-item input input-sm w-56" aria-label={ "Name of " + g.Name } required/>
+										<button class="join-item btn btn-sm">Rename</button>
+									</form>
+								</td>
+								<td>
+									<select name="interval" class="select select-sm w-32" aria-label={ "Interval of " + g.Name } hx-post={ "/recurring/" + itoa(g.ID) + "/interval" } hx-target="#recurring" hx-swap="outerHTML">
+										<option value="" selected?={ g.Interval == "" }>Not known</option>
+										for _, i := range store.Intervals {
+											<option value={ i } selected?={ i == g.Interval }>{ intervalLabel(i) }</option>
+										}
+									</select>
+								</td>
+								<td class="text-right tabular-nums">
+									<a class="link link-hover" href={ templ.SafeURL("/transactions?recurring=" + itoa(g.ID)) }>{ strconv.Itoa(g.Count) }</a>
+								</td>
+								if g.Count == 0 {
+									<td class="text-base-content/50">–</td>
+									<td class="text-right text-base-content/50">–</td>
+								} else {
+									<td class="whitespace-nowrap tabular-nums">
+										{ dateDE(g.LastDate) }
+										if g.Lapsed(d.AsOf) {
+											<span class="badge badge-xs badge-warning badge-soft ml-1" title="No payment for more than two intervals. If it has ended, switch it to inactive.">ended?</span>
+										}
+									</td>
+									<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.LastCents) }</td>
+								}
+								<td class="text-right whitespace-nowrap tabular-nums font-medium">
+									if cents, ok := g.MonthlyCents(); ok {
+										{ money.FormatDE(cents) }
+									} else {
+										<span class="text-base-content/50 font-normal">–</span>
+									}
+								</td>
+								<td>
+									<input
+										type="checkbox"
+										name="value"
+										value="1"
+										class="checkbox checkbox-sm"
+										checked?={ g.CoversReserve }
+										aria-label={ "Cover " + g.Name + " by the reserve" }
+										title="Count this group's transactions as irregular expenses for the reserve"
+										hx-post={ "/recurring/" + itoa(g.ID) + "/reserve" }
+										hx-target="#recurring"
+										hx-swap="outerHTML"
+									/>
+								</td>
+								<td>
+									<form class="join" hx-post={ "/recurring/" + itoa(g.ID) + "/merge" } hx-target="#recurring" hx-swap="outerHTML" hx-confirm={ "Merge “" + g.Name + "” into the selected group? Its transactions move there and it is deleted. This cannot be undone." }>
+										<select name="into_id" class="join-item select select-sm w-40" aria-label={ "Merge " + g.Name + " into" }>
+											<option value="">Choose…</option>
+											for _, o := range d.Groups {
+												if o.ID != g.ID {
+													<option value={ itoa(o.ID) }>{ o.Name }</option>
+												}
+											}
+										</select>
+										<button class="join-item btn btn-sm">Merge</button>
+									</form>
+								</td>
+								<td>
+									<button class="btn btn-sm btn-ghost" hx-post={ "/recurring/" + itoa(g.ID) + "/delete" } hx-target="#recurring" hx-swap="outerHTML" hx-confirm={ "Delete the group “" + g.Name + "”? Its " + plural(g.Count, "transaction", "transactions") + " stay, but are in no group afterwards, and imports will not bring the group back." }>Delete</button>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
 		}
 	</div>
 }

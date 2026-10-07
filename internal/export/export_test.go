@@ -78,7 +78,7 @@ func TestCSV(t *testing.T) {
 
 	wantRows := map[string]int{
 		"transactions_flat": 8, "transactions": 8, "accounts": 2, "categories": 11,
-		"allocations": 7, "tags": 3, "transaction_tags": 4, "imports": 1, "raw_records": 8,
+		"allocations": 7, "tags": 3, "transaction_tags": 4, "recurring_groups": 2, "imports": 1, "raw_records": 8,
 	}
 	if len(files) != len(wantRows) {
 		t.Errorf("%d files written, want %d", len(files), len(wantRows))
@@ -137,6 +137,11 @@ func TestCSV(t *testing.T) {
 		{"fg-0002", "value_date", ""}, // NULL
 		{"fg-0002", "main_category", "Essen & Trinken"},
 		{"fg-0003", "is_transfer", "1"},
+		{"fg-0003", "is_reserve", "0"},
+		{"fg-0003", "recurring_group", ""},
+		{"fg-0008", "recurring_group", "Hausverwaltung Beispiel"},
+		{"fg-0008", "recurring_interval", "monthly"},
+		{"fg-0008", "recurring_active", "1"},
 		{"fg-0005", "counterparty", "Rundfunk ARD, ZDF, DRadio"},
 		{"fg-0006", "tags", "geschenk;urlaub-2026"},
 		{"fg-0006", "purpose", "say \"hi\", twice\nsecond line"},
@@ -163,8 +168,8 @@ func TestParquet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 9 {
-		t.Errorf("%d files written, want 9", len(files))
+	if len(files) != 10 {
+		t.Errorf("%d files written, want 10", len(files))
 	}
 
 	path := filepath.Join(dir, "transactions_flat.parquet")

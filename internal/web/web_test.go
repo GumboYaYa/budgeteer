@@ -16,6 +16,7 @@ import (
 
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/money"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
 
@@ -126,6 +127,9 @@ func TestPagesRender(t *testing.T) {
 			"/transactions":                       "Transactions",
 			"/transactions?q=aldi&status=&page=1": "Transactions",
 			"/categories":                         "Categories",
+			"/reserve":                            "Reserve account",
+			"/recurring":                          "New group",
+			"/transactions?recurring=any":         "All recurring",
 			"/import":                             "Finanzguru export",
 			"/static/app.js":                      "tx-row",
 			"/static/app.css":                     "tx-focus",
@@ -135,6 +139,16 @@ func TestPagesRender(t *testing.T) {
 			status, body := e.get(path)
 			if status != http.StatusOK || !strings.Contains(body, want) {
 				t.Errorf("seed=%v GET %s: status %d, body lacks %q", seed, path, status, want)
+			}
+		}
+		// Every page has the shortcut list behind the Help link; undo is an
+		// inbox key and missing from the transaction list's.
+		for path, undo := range map[string]bool{"/": true, "/inbox": true, "/transactions": false, "/reserve": true} {
+			_, body := e.get(path)
+			_, help, found := strings.Cut(body, `aria-label="Keyboard shortcuts">Help</div>`)
+			help, _, _ = strings.Cut(help, "</header>")
+			if !found || !strings.Contains(help, "Choose a category") || strings.Contains(help, "Undo the last action") != undo {
+				t.Errorf("seed=%v GET %s: Help lacks the shortcuts, or undo listed = %v, want %v", seed, path, !undo, undo)
 			}
 		}
 		if status, _ := e.get("/nope"); status != http.StatusNotFound {
@@ -156,9 +170,100 @@ func TestOverview(t *testing.T) {
 	if strings.Contains(body, "Sparen") {
 		t.Error("overview shows the transfer category")
 	}
+	// One month: this month's income, and beside it the average of the six
+	// months before (nothing before September).
+	for _, want := range []string{
+		`text-emerald-600 dark:text-emerald-400">` + money.FormatDE(250000),
+		"⌀ " + money.FormatDE(0) + " over the 6 months before", "this month",
+		`name="from" value="2026-09"`, `name="to" value="2026-09"`,
+		`href="/?month=2026-08" aria-label="Earlier`, `href="/?month=2026-10" aria-label="Later`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("overview for September lacks %q", want)
+		}
+	}
+	if _, october := e.get("/?month=2026-10"); !strings.Contains(october, "⌀ "+money.FormatDE(41667)+" over the 6 months before") {
+		t.Error("October should average September's income over six months")
+	}
 	// Without a month, the newest month with data is shown.
 	if _, body := e.get("/"); !strings.Contains(body, "September 2026") {
 		t.Error("default month is not the newest month with transactions")
+	}
+}
+
+func TestOverviewPeriod(t *testing.T) {
+	e := newEnv(t, true)
+	active := func(body string) string {
+		t.Helper()
+		_, rest, found := strings.Cut(body, "btn-neutral\" href=\"/?")
+		if !found {
+			return ""
+		}
+		_, rest, _ = strings.Cut(rest, ">")
+		label, _, _ := strings.Cut(rest, "<")
+		return label
+	}
+	tests := []struct {
+		query  string
+		label  string
+		preset string // highlighted shortcut
+		wants  []string
+		trendN int // months in the chart
+	}{
+		{query: "", label: "September 2026", preset: "Month", trendN: 12},
+		// The sums are September's; the average is per month of the period.
+		{query: "from=2026-07&to=2026-09", label: "July – September 2026", preset: "3 months", trendN: 12,
+			wants: []string{money.FormatDE(250000), "⌀ " + money.FormatDE(83333) + " per month", "in these 3 months", money.FormatDE(-132136),
+				`href="/?from=2026-04&amp;to=2026-06"`, `href="/?from=2026-10&amp;to=2026-12"`, "from=2026-07-01&amp;to=2026-09-30"}},
+		{query: "from=2025-10&to=2026-09", label: "October 2025 – September 2026", preset: "12 months", trendN: 12},
+		{query: "from=2026-01&to=2026-09", label: "January – September 2026", preset: "2026", trendN: 12},
+		// Longer than a year: the chart grows with the period.
+		{query: "from=2025-01&to=2026-09", label: "January 2025 – September 2026", trendN: 21,
+			wants: []string{"in these 21 months"}},
+		// The wrong way round, a single bound, nonsense.
+		{query: "from=2026-09&to=2026-07", label: "July – September 2026", preset: "3 months", trendN: 12},
+		{query: "from=2026-08", label: "August 2026", trendN: 12, wants: []string{money.FormatDE(0)}},
+		{query: "from=x&to=y", label: "September 2026", preset: "Month", trendN: 12},
+		// A period without transactions.
+		{query: "from=2024-01&to=2024-03", label: "January – March 2024", trendN: 12, wants: []string{"No transactions in January – March 2024"}},
+	}
+	for _, tt := range tests {
+		status, body := e.get("/?" + tt.query)
+		if status != http.StatusOK || !strings.Contains(body, `<h1 class="text-2xl font-semibold">`+tt.label+`</h1>`) {
+			t.Errorf("%q: status %d, heading is not %q", tt.query, status, tt.label)
+			continue
+		}
+		if got := active(body); got != tt.preset {
+			t.Errorf("%q: highlighted shortcut %q, want %q", tt.query, got, tt.preset)
+		}
+		for _, want := range tt.wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("%q: page lacks %q", tt.query, want)
+			}
+		}
+		_, trend, _ := strings.Cut(body, `"trend":{"labels":[`)
+		trend, _, _ = strings.Cut(trend, "]")
+		if got := strings.Count(trend, ",") + 1; got != tt.trendN {
+			t.Errorf("%q: chart has %d months, want %d", tt.query, got, tt.trendN)
+		}
+	}
+
+	// "All" starts at the oldest transaction. With only September in the
+	// fixture that is the same period as "Month", so add an older one.
+	if _, err := e.st.DB.Exec(`UPDATE transactions SET booking_date = '2025-03-14' WHERE external_id = 'fg-0002'`); err != nil {
+		t.Fatal(err)
+	}
+	_, body := e.get("/")
+	if !strings.Contains(body, `href="/?from=2025-03&amp;to=2026-09" aria-current="false"`) && !strings.Contains(body, `href="/?from=2025-03&amp;to=2026-09">All<`) {
+		t.Error("the All shortcut does not start at the oldest transaction")
+	}
+	_, body = e.get("/?from=2025-03&to=2026-09")
+	if got := active(body); got != "All" {
+		t.Errorf("highlighted shortcut for the whole history = %q, want All", got)
+	}
+	// A period far beyond anything real is cut down instead of looping.
+	if status, _ := e.get("/?from=0001-01&to=2026-09"); status != http.StatusOK {
+		t.Errorf("huge period: status %d", status)
 	}
 }
 
@@ -171,8 +276,20 @@ func TestInboxListsUncategorized(t *testing.T) {
 	if !strings.Contains(body, `id="tx-`+e.txID("fg-0007")+`"`) {
 		t.Error("inbox row has no id")
 	}
+	if strings.Contains(body, "tx-check-all") {
+		t.Error("inbox has a select-all checkbox")
+	}
+	if _, list := e.get("/transactions"); strings.Count(list, `tx-check-all"`) != 1 {
+		t.Error("transaction list should have one select-all checkbox")
+	}
 	// The picker offers every category.
-	if n := strings.Count(body, `class="picker-item"`); n != 11 {
+	categories, groups, _ := strings.Cut(body, `id="group-picker"`)
+	// The group picker offers the two contracts of the file, "no group" and
+	// the entry that creates a group.
+	if n := strings.Count(groups, `class="picker-item"`); n != 4 {
+		t.Errorf("group picker has %d entries, want 4", n)
+	}
+	if n := strings.Count(categories, `class="picker-item"`); n != 11 {
 		t.Errorf("picker has %d categories, want 11", n)
 	}
 }
@@ -311,6 +428,222 @@ func TestTransferAndUndo(t *testing.T) {
 	_, body, _ := e.post("/api/transfer", url.Values{"ids": {transfer}, "value": {"0"}, "view": {"list"}})
 	if strings.Contains(body, "data-transfer") || strings.Contains(body, ">Transfer<") {
 		t.Errorf("row still shown as transfer: %s", body)
+	}
+}
+
+func TestReserve(t *testing.T) {
+	e := newEnv(t, true)
+	rent, radio, unknown := e.txID("fg-0008"), e.txID("fg-0005"), e.txID("fg-0007")
+	marked := `SELECT COALESCE(group_concat(external_id), '') FROM (SELECT external_id FROM transactions WHERE is_reserve = 1 ORDER BY external_id)`
+	contains := func(body string, wants ...string) {
+		t.Helper()
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("page lacks %q", want)
+			}
+		}
+	}
+
+	_, body := e.get("/reserve")
+	contains(body, "No irregular expenses marked", "nothing marked yet", "no reserve account chosen")
+
+	// Marking keeps the rows in place, so the inbox gets them back as well.
+	status, body, _ := e.post("/api/reserve", url.Values{"ids": {rent, radio, unknown}, "value": {"1"}, "view": {"inbox"}})
+	if status != http.StatusOK || strings.Count(body, "data-reserve") != 3 || strings.Contains(body, "Uncategorized") {
+		t.Fatalf("mark: status %d, body %s", status, body)
+	}
+	if got := e.text(`SELECT count(*) FROM uncategorized`); got != "1" {
+		t.Errorf("uncategorized = %s, want 1: marking must not categorize", got)
+	}
+	// Unmarking from the list returns the row without the badge.
+	status, body, _ = e.post("/api/reserve", url.Values{"ids": {unknown}, "value": {"0"}, "view": {"list"}})
+	if status != http.StatusOK || strings.Contains(body, "data-reserve") || !strings.Contains(body, "Uncategorized") {
+		t.Errorf("unmark: status %d, body %s", status, body)
+	}
+	// A failed batch changes nothing.
+	if status, _, _ := e.post("/api/reserve", url.Values{"ids": {unknown, "99999"}, "value": {"1"}}); status != http.StatusNotFound {
+		t.Errorf("unknown transaction: status %d, want 404", status)
+	}
+	if status, _, _ := e.post("/api/reserve", url.Values{"value": {"1"}}); status != http.StatusBadRequest {
+		t.Errorf("no ids: status %d, want 400", status)
+	}
+	if got := e.text(marked); got != "fg-0005,fg-0008" {
+		t.Errorf("marked = %s", got)
+	}
+	_, body = e.get("/transactions?status=reserve", "HX-Request", "true", "HX-Target", "results")
+	if got := strings.Count(body, `class="tx-row"`); got != 2 {
+		t.Errorf("status=reserve lists %d rows, want 2", got)
+	}
+
+	// Both bills (1234.56 + 18.36) were paid this month and are due in a
+	// year: a twelfth each month, rounded up.
+	_, body = e.get("/reserve")
+	contains(body, "the newest imported transaction", "12.09.2026", "Hausverwaltung Beispiel", "12.09.2027", "05.09.2027",
+		money.FormatDE(125292), money.FormatDE(10441), "a twelfth of the bills of a year", "no reserve account chosen", "on target")
+
+	// The balance of the reserve account counts as saved.
+	status, body, _ = e.post("/reserve/account", url.Values{"account": {"gemeinschaftskonto"}})
+	if status != http.StatusOK {
+		t.Fatalf("choose account: status %d", status)
+	}
+	contains(body, "Gemeinschaftskonto on 12.09.2026", money.FormatDE(124001)+" ahead")
+	e.post("/reserve/account", url.Values{"account": {"girokonto"}})
+	if got := e.text(`SELECT group_concat(slug) FROM accounts WHERE holds_reserve = 1`); got != "girokonto" {
+		t.Errorf("reserve accounts = %s, want only girokonto", got)
+	}
+	if status, _, _ := e.post("/reserve/account", url.Values{"account": {"nope"}}); status != http.StatusNotFound {
+		t.Errorf("unknown account: status %d, want 404", status)
+	}
+
+	// Had the rent been paid on 20.10. last year, it would be due before the
+	// next transfer but one: without savings the whole amount is needed now.
+	_, body, _ = e.post("/reserve/account", url.Values{"account": {""}})
+	contains(body, "no reserve account chosen")
+	if _, err := e.st.DB.Exec(`UPDATE transactions SET booking_date = '2025-10-20' WHERE id = ?`, rent); err != nil {
+		t.Fatal(err)
+	}
+	_, body = e.get("/reserve")
+	contains(body, "20.10.2026", "this month, to cover the next bill", money.FormatDE(123456), money.FormatDE(113168)+" behind", "The reserve is behind")
+}
+
+func TestRecurring(t *testing.T) {
+	e := newEnv(t, true)
+	aldi, unknown, rent := e.txID("fg-0002"), e.txID("fg-0007"), e.txID("fg-0008")
+	groupOf := `SELECT COALESCE((SELECT name FROM recurring_groups g WHERE g.id = t.recurring_group_id), '-') || '|' || recurring_manual
+		FROM transactions t WHERE id = ?`
+	groupID := func(name string) string {
+		return e.text(`SELECT id FROM recurring_groups WHERE name = ?`, name)
+	}
+	rows := func(query string) int {
+		t.Helper()
+		_, body := e.get("/transactions?"+query, "HX-Request", "true", "HX-Target", "results")
+		return strings.Count(body, `class="tx-row"`)
+	}
+
+	// The import made a group of each Finanzguru contract.
+	_, body := e.get("/recurring")
+	for _, want := range []string{"Hausverwaltung Beispiel", "Rundfunk ARD, ZDF, DRadio", "Per month in total", money.FormatDE(-125292)} {
+		if !strings.Contains(body, want) {
+			t.Errorf("recurring page lacks %q", want)
+		}
+	}
+
+	// A new group is created by its name; the rows come back marked, in the
+	// inbox as well.
+	status, body, header := e.post("/api/recurring", url.Values{"ids": {aldi, unknown}, "name": {" Wocheneinkauf "}, "view": {"inbox"}})
+	created := groupID("Wocheneinkauf")
+	if status != http.StatusOK || header.Get("X-Group-Id") != created || strings.Count(body, "Recurring: Wocheneinkauf") != 4 {
+		t.Fatalf("create by name: status %d, group %q (want %s), body %s", status, header.Get("X-Group-Id"), created, body)
+	}
+	// The same name again, in another case, is the same group.
+	e.post("/api/recurring", url.Values{"ids": {aldi}, "name": {"wocheneinkauf"}})
+	if n := e.text(`SELECT count(*) FROM recurring_groups`); n != "3" {
+		t.Errorf("%s groups, want 3", n)
+	}
+	status, body, _ = e.post("/api/recurring", url.Values{"ids": {unknown}, "group_id": {"0"}, "view": {"list"}})
+	if status != http.StatusOK || strings.Contains(body, "Recurring:") {
+		t.Errorf("take out: status %d, body %s", status, body)
+	}
+	for id, want := range map[string]string{aldi: "Wocheneinkauf|1", unknown: "-|1", rent: "Hausverwaltung Beispiel|0"} {
+		if got := e.text(groupOf, id); got != want {
+			t.Errorf("transaction %s: group %s, want %s", id, got, want)
+		}
+	}
+	// Failed requests change nothing.
+	for name, form := range map[string]url.Values{
+		"unknown group":       {"ids": {rent}, "group_id": {"999"}},
+		"unknown transaction": {"ids": {rent, "99999"}, "group_id": {created}},
+	} {
+		if status, _, _ := e.post("/api/recurring", form); status != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", name, status)
+		}
+	}
+	if status, _, _ := e.post("/api/recurring", url.Values{"ids": {rent}}); status != http.StatusBadRequest {
+		t.Errorf("neither group nor name: status %d, want 400", status)
+	}
+	if got := e.text(groupOf, rent); got != "Hausverwaltung Beispiel|0" {
+		t.Errorf("rent after failed requests: %s", got)
+	}
+
+	for query, want := range map[string]int{"recurring=any": 3, "recurring=" + created: 1, "recurring=" + created + "&q=miete": 0, "recurring=x": 8} {
+		if got := rows(query); got != want {
+			t.Errorf("%q: %d rows, want %d", query, got, want)
+		}
+	}
+
+	// Managing groups, as HTMX posts them.
+	hausverwaltung := groupID("Hausverwaltung Beispiel")
+	steps := []struct {
+		path string
+		form url.Values
+		want string // in the re-rendered list
+	}{
+		{"/recurring/" + hausverwaltung + "/rename", url.Values{"name": {"Miete"}}, `value="Miete"`},
+		{"/recurring/" + hausverwaltung + "/rename", url.Values{"name": {"wocheneinkauf"}}, "merge the two instead"},
+		{"/recurring/" + hausverwaltung + "/rename", url.Values{"name": {" "}}, "needs a name"},
+		{"/recurring/" + hausverwaltung + "/interval", url.Values{"interval": {"yearly"}}, money.FormatDE(-10288)}, // 1234.56 / 12
+		{"/recurring/" + hausverwaltung + "/interval", url.Values{"interval": {"weekly"}}, "unknown interval"},
+		{"/recurring/" + hausverwaltung + "/reserve", url.Values{"value": {"1"}}, "checked"},
+		{"/recurring", url.Values{"name": {"Versicherung"}, "interval": {"half-yearly"}}, `value="Versicherung"`},
+		{"/recurring/" + hausverwaltung + "/merge", url.Values{}, "choose the group to merge into"},
+		{"/recurring/999/delete", url.Values{}, "no longer exists"},
+	}
+	for _, step := range steps {
+		status, body, _ := e.post(step.path, step.form)
+		if status != http.StatusOK || strings.Contains(body, "<html") || !strings.Contains(body, step.want) {
+			t.Errorf("POST %s %v: status %d, list lacks %q", step.path, step.form, status, step.want)
+		}
+	}
+
+	// A group covered by the reserve makes its transactions count there.
+	if got := rows("status=reserve"); got != 1 {
+		t.Errorf("status=reserve lists %d rows, want the rent", got)
+	}
+	_, body = e.get("/reserve")
+	if !strings.Contains(body, "Hausverwaltung Beispiel") || !strings.Contains(body, money.FormatDE(123456)) {
+		t.Error("the reserve does not count the rent of the covered group")
+	}
+	_, body = e.get("/transactions?recurring=" + hausverwaltung)
+	if !strings.Contains(body, "through its recurring group Miete") {
+		t.Error("the row does not say that its group puts it into the reserve")
+	}
+
+	// A group that has ended keeps its transactions, but drops out of the
+	// monthly cost and of the reserve, and can be filtered.
+	status, body, _ = e.post("/recurring/"+hausverwaltung+"/active", url.Values{})
+	if status != http.StatusOK || !strings.Contains(body, "1 inactive not counted") || strings.Contains(body, money.FormatDE(-10288)) {
+		t.Errorf("switch to inactive: status %d, list still counts the group", status)
+	}
+	for query, want := range map[string]int{
+		"recurring=any": 3, "recurring=active": 2, "recurring=inactive": 1, "recurring=" + hausverwaltung: 1, "status=reserve": 0,
+	} {
+		if got := rows(query); got != want {
+			t.Errorf("with an inactive group, %q: %d rows, want %d", query, got, want)
+		}
+	}
+	_, body = e.get("/transactions?recurring=" + hausverwaltung)
+	if !strings.Contains(body, "Recurring, ended: Miete") || strings.Contains(body, "through its recurring group") {
+		t.Error("the row of an ended group should say so and not count for the reserve")
+	}
+	if _, body = e.get("/inbox"); !strings.Contains(body, `badge-ghost">inactive<`) {
+		t.Error("the group picker does not mark the inactive group")
+	}
+	e.post("/recurring/"+hausverwaltung+"/active", url.Values{"value": {"1"}})
+	if got := rows("status=reserve"); got != 1 {
+		t.Errorf("active again: status=reserve lists %d rows, want 1", got)
+	}
+
+	// Merging moves the transactions; deleting leaves them without a group.
+	e.post("/recurring/"+created+"/merge", url.Values{"into_id": {hausverwaltung}})
+	if got := e.text(groupOf, aldi); got != "Miete|1" {
+		t.Errorf("after merge: %s", got)
+	}
+	e.post("/recurring/"+hausverwaltung+"/delete", url.Values{})
+	if got := e.text(groupOf, aldi) + " " + e.text(groupOf, rent); got != "-|1 -|0" {
+		t.Errorf("after delete: %s", got)
+	}
+	if got := rows("status=reserve"); got != 0 {
+		t.Errorf("status=reserve lists %d rows after the group is gone", got)
 	}
 }
 

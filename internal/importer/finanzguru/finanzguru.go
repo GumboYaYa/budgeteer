@@ -36,10 +36,13 @@ const (
 	colSubCategory     = "Analyse-Unterkategorie"
 	colTransfer        = "Analyse-Umbuchung"
 	colContract        = "Analyse-Vertrag"
-	colTags            = "Tags"
-	colBookingID       = "Buchungs-ID"
-	colSplitOriginal   = "Referenz-Original-ID"
-	colSplitType       = "Split-Typ"
+	// Not in every export, so not required.
+	colContractID       = "Analyse-Vertrags-ID"
+	colContractInterval = "Analyse-Vertragsturnus"
+	colTags             = "Tags"
+	colBookingID        = "Buchungs-ID"
+	colSplitOriginal    = "Referenz-Original-ID"
+	colSplitType        = "Split-Typ"
 )
 
 var requiredColumns = []string{
@@ -246,7 +249,18 @@ func normalize(row importer.RawRow) (importer.Candidate, error) {
 		MainCategory: get(colMainCategory),
 		SubCategory:  get(colSubCategory),
 		Tags:         tags,
+
+		ContractID:       get(colContractID),
+		ContractInterval: contractIntervals[get(colContractInterval)],
 	}, nil
+}
+
+// contractIntervals maps the Analyse-Vertragsturnus column.
+var contractIntervals = map[string]string{
+	"monatlich":        store.IntervalMonthly,
+	"vierteljaehrlich": store.IntervalQuarterly,
+	"halbjaehrlich":    store.IntervalHalfYearly,
+	"jaehrlich":        store.IntervalYearly,
 }
 
 func purchaseDate(purpose string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -148,6 +149,56 @@ func TestAccounts(t *testing.T) {
 	}
 }
 
+func TestReserveAccount(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	ids := map[string]int64{}
+	for _, slug := range []string{"giro", "tagesgeld"} {
+		a, err := s.CreateAccount(ctx, Account{Slug: slug, Name: slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[slug] = a.ID
+	}
+	holders := func() string {
+		t.Helper()
+		list, err := s.ListAccounts(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out string
+		for _, a := range list {
+			if a.HoldsReserve {
+				out += a.Slug + " "
+			}
+		}
+		return out
+	}
+
+	steps := []struct {
+		id      int64
+		wantErr error
+		want    string
+	}{
+		{ids["giro"], nil, "giro "},
+		{ids["tagesgeld"], nil, "tagesgeld "}, // moves, never two
+		{999, ErrNotFound, "tagesgeld "},      // a failed change keeps the old account
+		{0, nil, ""},
+	}
+	for _, step := range steps {
+		if err := s.SetReserveAccount(ctx, step.id); !errors.Is(err, step.wantErr) {
+			t.Errorf("SetReserveAccount(%d) error = %v, want %v", step.id, err, step.wantErr)
+		}
+		if got := holders(); got != step.want {
+			t.Errorf("after SetReserveAccount(%d): holders = %q, want %q", step.id, got, step.want)
+		}
+	}
+
+	if err := s.SetReserve(ctx, 999, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetReserve(unknown) error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateAccountErrors(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -167,6 +218,144 @@ func TestCreateAccountErrors(t *testing.T) {
 	for _, a := range bad {
 		if _, err := s.CreateAccount(ctx, a); err == nil {
 			t.Errorf("CreateAccount(%+v) succeeded, want error", a)
+		}
+	}
+}
+
+func TestRecurringGroups(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+
+	strom, err := s.EnsureRecurringGroup(ctx, " Strom ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.EnsureRecurringGroup(ctx, "strom"); err != nil || again != strom {
+		t.Errorf("EnsureRecurringGroup(strom) = %d, %v; want the existing group %d", again, err, strom)
+	}
+	if _, err := s.EnsureRecurringGroup(ctx, "  "); err == nil {
+		t.Error("a group without a name was accepted")
+	}
+	// Contracts with the same counterparty get distinct names.
+	a, err := s.CreateContractGroup(ctx, "finanzguru", "vt-1", "Strom", "yearly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateContractGroup(ctx, "finanzguru", "vt-2", "", "sometimes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameRecurringGroup(ctx, a, "STROM"); err == nil {
+		t.Error("renaming to the name of another group was accepted")
+	}
+	if err := s.SetRecurringInterval(ctx, strom, "weekly"); err == nil {
+		t.Error("an unknown interval was accepted")
+	}
+	if err := s.SetRecurringInterval(ctx, strom, IntervalQuarterly); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecurringReserve(ctx, a, true); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := s.ListRecurringGroups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, g := range groups {
+		got = append(got, g.Name+"|"+g.Interval)
+	}
+	if want := "Contract vt-2| Strom|quarterly Strom 2|yearly"; strings.Join(got, " ") != want {
+		t.Errorf("groups = %q, want %q", strings.Join(got, " "), want)
+	}
+
+	// Merging moves the contract along; deleting dismisses it.
+	if err := s.MergeRecurringGroup(ctx, a, strom); err != nil {
+		t.Fatal(err)
+	}
+	if id, known, _ := s.ContractGroup(ctx, "finanzguru", "vt-1"); !known || id != strom {
+		t.Errorf("contract vt-1 after merge: group %d, known %v; want %d", id, known, strom)
+	}
+	if err := s.DeleteRecurringGroup(ctx, strom); err != nil {
+		t.Fatal(err)
+	}
+	if id, known, _ := s.ContractGroup(ctx, "finanzguru", "vt-1"); !known || id != 0 {
+		t.Errorf("contract vt-1 after delete: group %d, known %v; want dismissed", id, known)
+	}
+	if _, known, _ := s.ContractGroup(ctx, "finanzguru", "vt-9"); known {
+		t.Error("an unseen contract is reported as known")
+	}
+	for name, err := range map[string]error{
+		"merge unknown": s.MergeRecurringGroup(ctx, 998, 999), "delete unknown": s.DeleteRecurringGroup(ctx, 999),
+		"rename unknown": s.RenameRecurringGroup(ctx, 999, "x"), "assign unknown group": s.SetRecurringGroup(ctx, 1, 999),
+	} {
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: error = %v, want ErrNotFound", name, err)
+		}
+	}
+
+	tests := []struct {
+		group RecurringGroup
+		want  int64
+		ok    bool
+	}{
+		{RecurringGroup{Active: true, Interval: IntervalMonthly, Count: 3, LastCents: -1299}, -1299, true},
+		{RecurringGroup{Active: true, Interval: IntervalYearly, Count: 1, LastCents: -10000}, -833, true},
+		{RecurringGroup{Active: true, Interval: IntervalQuarterly, Count: 1, LastCents: 5000}, 1667, true},
+		{RecurringGroup{Active: true, Interval: "", Count: 3, LastCents: -1299}, 0, false},
+		{RecurringGroup{Active: true, Interval: IntervalMonthly}, 0, false},
+		{RecurringGroup{Active: false, Interval: IntervalMonthly, Count: 3, LastCents: -1299}, 0, false}, // ended
+	}
+	for _, tt := range tests {
+		if got, ok := tt.group.MonthlyCents(); got != tt.want || ok != tt.ok {
+			t.Errorf("MonthlyCents(%+v) = %d, %v; want %d, %v", tt.group, got, ok, tt.want, tt.ok)
+		}
+	}
+
+	// New groups are active; the flag is switched by hand.
+	netflix, err := s.EnsureRecurringGroup(ctx, "Netflix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func() bool {
+		t.Helper()
+		groups, err := s.ListRecurringGroups(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range groups {
+			if g.ID == netflix {
+				return g.Active
+			}
+		}
+		t.Fatal("group not listed")
+		return false
+	}
+	if !active() {
+		t.Error("a new group is not active")
+	}
+	if err := s.SetRecurringActive(ctx, netflix, false); err != nil || active() {
+		t.Errorf("SetRecurringActive(false): error %v, still active %v", err, active())
+	}
+	if err := s.SetRecurringActive(ctx, 999, false); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetRecurringActive(unknown) error = %v, want ErrNotFound", err)
+	}
+
+	// More than two intervals without a payment look like the end.
+	lapsed := []struct {
+		group RecurringGroup
+		want  bool
+	}{
+		{RecurringGroup{Active: true, Interval: IntervalMonthly, Count: 1, LastDate: "2026-08-04"}, true},
+		{RecurringGroup{Active: true, Interval: IntervalMonthly, Count: 1, LastDate: "2026-08-05"}, false},
+		{RecurringGroup{Active: true, Interval: IntervalYearly, Count: 1, LastDate: "2025-01-10"}, false},
+		{RecurringGroup{Active: true, Interval: IntervalYearly, Count: 1, LastDate: "2024-10-04"}, true},
+		{RecurringGroup{Active: false, Interval: IntervalMonthly, Count: 1, LastDate: "2020-01-01"}, false}, // already marked
+		{RecurringGroup{Active: true, Interval: "", Count: 1, LastDate: "2020-01-01"}, false},
+		{RecurringGroup{Active: true, Interval: IntervalMonthly}, false},
+	}
+	for _, tt := range lapsed {
+		if got := tt.group.Lapsed("2026-10-05"); got != tt.want {
+			t.Errorf("Lapsed(%+v) = %v, want %v", tt.group, got, tt.want)
 		}
 	}
 }

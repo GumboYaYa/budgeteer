@@ -516,6 +516,9 @@ func TestForceIdenticalFile(t *testing.T) {
 	if err := st.SetTransfer(ctx, transferID, false); err != nil { // file says ja
 		t.Fatal(err)
 	}
+	if err := st.SetReserve(ctx, salaryID, true); err != nil {
+		t.Fatal(err)
+	}
 
 	s := mustRun(t, st, sampleV1, importer.Options{Force: true})
 	if s.AlreadyImported || s.Rows != 8 || s.New != 0 || s.Duplicates != 8 || s.FieldsUpdated != 1 || s.Updated != 0 {
@@ -533,6 +536,7 @@ func TestForceIdenticalFile(t *testing.T) {
 		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0001'`, "1|1"},
 		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0003'`, "0|1"},
 		{`SELECT is_transfer || '|' || is_transfer_manual FROM transactions WHERE external_id = 'fg-0004'`, "1|0"},
+		{`SELECT group_concat(external_id) FROM transactions WHERE is_reserve = 1`, "fg-0001"},
 	}
 	for _, c := range checks {
 		if got := text(t, st, c.query); got != c.want {
@@ -681,5 +685,69 @@ func TestDayEndBalanceNewestFirst(t *testing.T) {
 	}
 	if want := "2:30000 5:25000"; strings.Join(got, " ") != want {
 		t.Errorf("day-end balances = %v, want %s", got, want)
+	}
+}
+
+func TestRecurringContracts(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	groupOf := func(externalID string) string {
+		return text(t, st, `
+			SELECT COALESCE((SELECT g.name || ' (' || COALESCE(g.interval, '?') || ')' FROM recurring_groups g
+			                 WHERE g.id = t.recurring_group_id), '-')
+			FROM transactions t WHERE t.external_id = ?`, externalID)
+	}
+	txID := func(externalID string) int64 {
+		return int64(count(t, st, `SELECT id FROM transactions WHERE external_id = ?`, externalID))
+	}
+	groupID := func(name string) int64 {
+		return int64(count(t, st, `SELECT id FROM recurring_groups WHERE name = ?`, name))
+	}
+
+	// Each contract of the file becomes a group named after the counterparty.
+	if s := mustRun(t, st, sampleV1, importer.Options{}); s.GroupsCreated != 2 {
+		t.Errorf("GroupsCreated = %d, want 2", s.GroupsCreated)
+	}
+	for id, want := range map[string]string{
+		"fg-0008": "Hausverwaltung Beispiel (monthly)", "fg-0005": "Rundfunk ARD, ZDF, DRadio (monthly)", "fg-0002": "-",
+	} {
+		if got := groupOf(id); got != want {
+			t.Errorf("group of %s = %s, want %s", id, got, want)
+		}
+	}
+
+	// Work done by hand: one transaction taken out, one group renamed. The
+	// rent is put back to how a database from before this feature looks.
+	if err := st.SetRecurringGroup(ctx, txID("fg-0005"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RenameRecurringGroup(ctx, groupID("Hausverwaltung Beispiel"), "Miete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB.Exec(`UPDATE transactions SET recurring_group_id = NULL WHERE external_id = 'fg-0008'`); err != nil {
+		t.Fatal(err)
+	}
+	// A later export fills in existing transactions and keeps the manual work.
+	if s := mustRun(t, st, sampleV2, importer.Options{}); s.GroupsCreated != 0 {
+		t.Errorf("second import: GroupsCreated = %d, want 0", s.GroupsCreated)
+	}
+	for id, want := range map[string]string{"fg-0008": "Miete (monthly)", "fg-0005": "-"} {
+		if got := groupOf(id); got != want {
+			t.Errorf("after second import: group of %s = %s, want %s", id, got, want)
+		}
+	}
+
+	// A deleted group stays deleted, also when the file is forced through.
+	if err := st.DeleteRecurringGroup(ctx, groupID("Miete")); err != nil {
+		t.Fatal(err)
+	}
+	if s := mustRun(t, st, sampleV2, importer.Options{Force: true}); s.GroupsCreated != 0 {
+		t.Errorf("forced import: GroupsCreated = %d, want 0", s.GroupsCreated)
+	}
+	if got := groupOf("fg-0008"); got != "-" {
+		t.Errorf("group of fg-0008 after deleting its group = %s", got)
+	}
+	if n := count(t, st, `SELECT count(*) FROM recurring_groups`); n != 1 {
+		t.Errorf("%d groups left, want 1", n)
 	}
 }

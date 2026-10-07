@@ -33,7 +33,7 @@ type Dataset struct {
 // exportTables are dumped as they are, in this order.
 var exportTables = []string{
 	"accounts", "categories", "transactions", "allocations",
-	"tags", "transaction_tags", "imports", "raw_records",
+	"tags", "transaction_tags", "recurring_groups", "imports", "raw_records",
 }
 
 // transactionsFlat is the dataset meant for spreadsheets and notebooks: one
@@ -46,6 +46,8 @@ const transactionsFlat = `
 	       CASE WHEN p.id IS NOT NULL THEN c.name END AS sub_category,
 	       c.slug AS category_slug, al.source AS category_source,
 	       t.is_transfer,
+	       (t.is_reserve = 1 OR COALESCE(rg.covers_reserve = 1 AND rg.active = 1, 0) = 1) AS is_reserve,
+	       rg.name AS recurring_group, rg.interval AS recurring_interval, rg.active AS recurring_active,
 	       (SELECT group_concat(name, ';') FROM (
 	            SELECT g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id
 	            WHERE tt.transaction_id = t.id ORDER BY g.name)) AS tags,
@@ -56,10 +58,11 @@ const transactionsFlat = `
 	LEFT JOIN allocations al ON al.transaction_id = t.id AND al.source <> 'suggested'
 	LEFT JOIN categories c ON c.id = al.category_id
 	LEFT JOIN categories p ON p.id = c.parent_id
+	LEFT JOIN recurring_groups rg ON rg.id = t.recurring_group_id
 	ORDER BY t.booking_date, t.id`
 
 var transactionsFlatKinds = map[string]Kind{
-	"id": KindInt, "amount": KindCents, "amount_cents": KindInt, "is_transfer": KindInt,
+	"id": KindInt, "amount": KindCents, "amount_cents": KindInt, "is_transfer": KindInt, "is_reserve": KindInt, "recurring_active": KindInt,
 }
 
 // ExportDatasets reads every table plus the flat transaction list, all from

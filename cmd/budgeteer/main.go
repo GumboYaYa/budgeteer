@@ -22,6 +22,8 @@ import (
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
+	"github.com/GumboYaYa/budgeteer/internal/money"
+	"github.com/GumboYaYa/budgeteer/internal/reserve"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 	"github.com/GumboYaYa/budgeteer/internal/web"
 )
@@ -35,13 +37,15 @@ type cli struct {
 		Add        accountAddCmd        `cmd:"" help:"Add one of your own bank accounts."`
 		List       accountListCmd       `cmd:"" help:"List accounts."`
 		SetCutover accountSetCutoverCmd `cmd:"" help:"Set the date up to which Finanzguru provides an account's transactions; bank exports take over after it."`
+		SetReserve accountSetReserveCmd `cmd:"" help:"Choose the account the reserve for irregular expenses is saved on."`
 	} `cmd:"" help:"Manage accounts."`
 	Import struct {
 		Finanzguru importFinanzguruCmd `cmd:"" help:"Import a Finanzguru export. Can be repeated with newer exports; only new transactions are added."`
 		DKB        importDKBCmd        `cmd:"" name:"dkb" help:"Import a DKB account export (CSV). Exports may overlap; only new transactions are added."`
 	} `cmd:"" help:"Import transactions from a file."`
-	Export exportCmd `cmd:"" help:"Write all data as CSV or Parquet files."`
-	Backup backupCmd `cmd:"" help:"Write a consistent copy of the database."`
+	Reserve reserveCmd `cmd:"" help:"Show the monthly amount to set aside for expenses that come once or twice a year."`
+	Export  exportCmd  `cmd:"" help:"Write all data as CSV or Parquet files."`
+	Backup  backupCmd  `cmd:"" help:"Write a consistent copy of the database."`
 }
 
 // dbPath is the database location, for commands that keep files next to it.
@@ -146,6 +150,68 @@ func (c accountSetCutoverCmd) Run(ctx context.Context, st *store.Store) error {
 	}
 	fmt.Printf("cut-over date of %s set to %s\n", c.Slug, c.Date)
 	return nil
+}
+
+type accountSetReserveCmd struct {
+	Slug string `xor:"account" required:"" help:"Account that holds the reserve."`
+	None bool   `xor:"account" required:"" help:"No account holds the reserve."`
+}
+
+func (c accountSetReserveCmd) Run(ctx context.Context, st *store.Store) error {
+	if c.None {
+		if err := st.SetReserveAccount(ctx, 0); err != nil {
+			return err
+		}
+		fmt.Println("no account holds the reserve")
+		return nil
+	}
+	a, err := st.AccountBySlug(ctx, c.Slug)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("no account with slug %q (see: budgeteer account list)", c.Slug)
+	}
+	if err != nil {
+		return err
+	}
+	if err := st.SetReserveAccount(ctx, a.ID); err != nil {
+		return err
+	}
+	fmt.Printf("the reserve is saved on %s (%s)\n", a.Slug, a.Name)
+	return nil
+}
+
+type reserveCmd struct{}
+
+func (reserveCmd) Run(ctx context.Context, st *store.Store) error {
+	s, err := reserve.Load(ctx, st)
+	if err != nil {
+		return err
+	}
+	if len(s.Items) == 0 {
+		fmt.Println("no irregular expenses marked in the past twelve months; mark them with r in the web UI")
+		return nil
+	}
+	saved := "no reserve account chosen, see: budgeteer account set-reserve"
+	switch {
+	case s.BalanceKnown:
+		saved = s.Account.Slug
+	case s.HasAccount:
+		saved = "balance of " + s.Account.Slug + " is not known"
+	}
+	fmt.Printf("as of:               %s\n", s.AsOf)
+	fmt.Printf("move each month:     %s\n", money.FormatDE(s.MonthlyCents))
+	if s.CatchUpMonths > 0 {
+		fmt.Printf("                     for %d month(s), then %s\n", s.CatchUpMonths, money.FormatDE(s.SteadyCents))
+	}
+	fmt.Printf("bills per year:      %s\n", money.FormatDE(s.YearlyCents))
+	fmt.Printf("saved:               %s (%s)\n", money.FormatDE(s.SavedCents), saved)
+	fmt.Printf("should be saved:     %s\n\n", money.FormatDE(s.TargetCents))
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
+	fmt.Fprintln(w, "DUE\tLAST PAID\tAMOUNT\t")
+	for _, it := range s.Items {
+		fmt.Fprintf(w, "%s\t%s\t%s\t  %s\n", it.DueOn, it.PaidOn, money.FormatDE(it.Cents), it.Counterparty)
+	}
+	return w.Flush()
 }
 
 type importDKBCmd struct {
@@ -265,6 +331,9 @@ func printSummary(s importer.Summary) {
 	}
 	if s.CategoriesCreated > 0 {
 		fmt.Printf("categories created:    %d\n", s.CategoriesCreated)
+	}
+	if s.GroupsCreated > 0 {
+		fmt.Printf("recurring groups:      %d created from contracts\n", s.GroupsCreated)
 	}
 	if s.SkippedSuperseded > 0 {
 		fmt.Printf("split originals:       %d (their parts are imported instead)\n", s.SkippedSuperseded)
