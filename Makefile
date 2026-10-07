@@ -1,4 +1,4 @@
-.PHONY: build test vet run generate css tools
+.PHONY: build test vet run dev generate css tools
 
 build:
 	go build -o budgeteer ./cmd/budgeteer
@@ -12,6 +12,11 @@ vet:
 # make run ARGS="account list"
 run:
 	go run ./cmd/budgeteer $(ARGS)
+
+# Regenerate templates and CSS, then start the web UI from the current
+# sources. make dev ARGS="--addr localhost:8081"
+dev: generate css
+	go run ./cmd/budgeteer serve $(ARGS)
 
 # Regenerate after editing *.templ or assets/app.css. The results are
 # committed, so a plain `make build` needs neither tool.

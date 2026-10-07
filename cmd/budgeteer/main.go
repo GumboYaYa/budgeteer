@@ -332,6 +332,9 @@ func printSummary(s importer.Summary) {
 	if s.CategoriesCreated > 0 {
 		fmt.Printf("categories created:    %d\n", s.CategoriesCreated)
 	}
+	if s.GroupsCreated > 0 {
+		fmt.Printf("recurring groups:      %d created from contracts\n", s.GroupsCreated)
+	}
 	if s.SkippedSuperseded > 0 {
 		fmt.Printf("split originals:       %d (their parts are imported instead)\n", s.SkippedSuperseded)
 	}

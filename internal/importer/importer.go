@@ -94,6 +94,12 @@ type Candidate struct {
 	MainCategory string
 	SubCategory  string
 	Tags         []string
+
+	// ContractID identifies the contract (a recurring series) the source
+	// assigns the row to; empty if none. ContractInterval is one of the
+	// store.Interval values, or empty if the source does not say.
+	ContractID       string
+	ContractInterval string
 }
 
 type Options struct {
@@ -125,6 +131,7 @@ type Summary struct {
 	Removed           int  // existing transactions deleted because they are now superseded
 	AccountsCreated   []string
 	CategoriesCreated int
+	GroupsCreated     int // recurring groups created from contracts of the source
 }
 
 // Run imports one file. It is idempotent: the identical file is recognised by
@@ -207,6 +214,7 @@ type run struct {
 	importID   int64
 	accounts   map[string]store.Account // by normalized IBAN
 	categories map[string]int64         // by slug
+	contracts  map[string]int64         // by contract id: recurring group, 0 if its group was deleted
 	balances   map[int64]balance        // by account id: newest stated balance among imported days
 	ownIBANs   map[string]int64         // IBAN → account id, for transfer detection
 	// fixed is the account of Options.Account; fileBalance its balance as
@@ -335,6 +343,9 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			if err := r.refreshCategory(ctx, txID, c.Tx.AmountCents, categoryID); err != nil {
 				return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
 			}
+			if err := r.contract(ctx, txID, c); err != nil {
+				return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
+			}
 			continue
 		}
 
@@ -363,6 +374,9 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 				return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
 			}
 		}
+		if err := r.contract(ctx, t.ID, c); err != nil {
+			return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
+		}
 	}
 
 	// Remember the newest balance the file states for each account. An older
@@ -380,6 +394,40 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 		}
 	}
 	return nil
+}
+
+// contract puts a transaction into the recurring group of the contract the
+// source assigns it to. A contract seen for the first time gets a group named
+// after the counterparty. A group chosen by hand is kept, and so is the
+// user's decision to delete a contract's group.
+func (r *run) contract(ctx context.Context, txID int64, c Candidate) error {
+	if c.ContractID == "" {
+		return nil
+	}
+	groupID, cached := r.contracts[c.ContractID]
+	if !cached {
+		var known bool
+		var err error
+		groupID, known, err = r.tx.ContractGroup(ctx, r.parser.Source(), c.ContractID)
+		if err != nil {
+			return err
+		}
+		if !known {
+			groupID, err = r.tx.CreateContractGroup(ctx, r.parser.Source(), c.ContractID, c.Tx.Counterparty, c.ContractInterval)
+			if err != nil {
+				return err
+			}
+			r.summary.GroupsCreated++
+		}
+		if r.contracts == nil {
+			r.contracts = make(map[string]int64)
+		}
+		r.contracts[c.ContractID] = groupID
+	}
+	if groupID == 0 {
+		return nil
+	}
+	return r.tx.AssignContractGroup(ctx, txID, groupID)
 }
 
 // ownsDate reports whether this source is responsible for a booking date,
