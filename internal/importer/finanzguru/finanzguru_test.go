@@ -724,6 +724,13 @@ func TestRecurringContracts(t *testing.T) {
 	if err := st.RenameRecurringGroup(ctx, groupID("Hausverwaltung Beispiel"), "Miete"); err != nil {
 		t.Fatal(err)
 	}
+	rundfunk := groupID("Rundfunk ARD, ZDF, DRadio")
+	if err := st.SetRecurringMandatory(ctx, rundfunk, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRecurringVerdict(ctx, rundfunk, store.VerdictKeep); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.DB.Exec(`UPDATE transactions SET recurring_group_id = NULL WHERE external_id = 'fg-0008'`); err != nil {
 		t.Fatal(err)
 	}
@@ -749,5 +756,9 @@ func TestRecurringContracts(t *testing.T) {
 	}
 	if n := count(t, st, `SELECT count(*) FROM recurring_groups`); n != 1 {
 		t.Errorf("%d groups left, want 1", n)
+	}
+	// The review of a group is manual work as well.
+	if n := count(t, st, `SELECT count(*) FROM recurring_groups WHERE mandatory = 1 AND verdict = 'keep'`); n != 1 {
+		t.Error("the imports changed the mandatory flag or the verdict of a group")
 	}
 }

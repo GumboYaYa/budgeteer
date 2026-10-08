@@ -48,6 +48,7 @@ const transactionsFlat = `
 	       t.is_transfer,
 	       (t.is_reserve = 1 OR COALESCE(rg.covers_reserve = 1 AND rg.active = 1, 0) = 1) AS is_reserve,
 	       rg.name AS recurring_group, rg.interval AS recurring_interval, rg.active AS recurring_active,
+	       rg.mandatory AS recurring_mandatory,
 	       (SELECT group_concat(name, ';') FROM (
 	            SELECT g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id
 	            WHERE tt.transaction_id = t.id ORDER BY g.name)) AS tags,
@@ -62,7 +63,7 @@ const transactionsFlat = `
 	ORDER BY t.booking_date, t.id`
 
 var transactionsFlatKinds = map[string]Kind{
-	"id": KindInt, "amount": KindCents, "amount_cents": KindInt, "is_transfer": KindInt, "is_reserve": KindInt, "recurring_active": KindInt,
+	"id": KindInt, "amount": KindCents, "amount_cents": KindInt, "is_transfer": KindInt, "is_reserve": KindInt, "recurring_active": KindInt, "recurring_mandatory": KindInt,
 }
 
 // ExportDatasets reads every table plus the flat transaction list, all from

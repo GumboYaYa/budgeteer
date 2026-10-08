@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -511,7 +512,8 @@ func (s *server) recurring(w http.ResponseWriter, r *http.Request) {
 
 // recurringAction runs a change on the group in the path (0 if the path has
 // none) and re-renders the group list, with the error shown above it if the
-// change was refused.
+// change was refused. Posted from the Optimize page (view=optimize), it
+// re-renders that page's content instead.
 func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change func(id int64) error) {
 	problem := ""
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -525,6 +527,15 @@ func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change 
 			s.fail(w, r, err)
 			return
 		}
+	}
+	if r.FormValue("view") == "optimize" {
+		d, err := s.optimizeData(r, problem)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.render(w, r, optimizeSection(d))
+		return
 	}
 	d, err := s.recurringData(r, problem)
 	if err != nil {
@@ -568,6 +579,18 @@ func (s *server) recurringActive(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) recurringMandatory(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringMandatory(r.Context(), id, r.FormValue("value") == "1")
+	})
+}
+
+func (s *server) recurringVerdict(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringVerdict(r.Context(), id, r.FormValue("verdict"))
+	})
+}
+
 func (s *server) recurringMerge(w http.ResponseWriter, r *http.Request) {
 	s.recurringAction(w, r, func(id int64) error {
 		intoID, err := formID(r, "into_id")
@@ -582,6 +605,78 @@ func (s *server) recurringDelete(w http.ResponseWriter, r *http.Request) {
 	s.recurringAction(w, r, func(id int64) error {
 		return s.st.DeleteRecurringGroup(r.Context(), id)
 	})
+}
+
+// --- optimize ---------------------------------------------------------------
+
+// optimizeData collects the running expenses for the review: the active
+// groups with a known interval whose newest transaction is an outflow. The
+// totals cover all of them; the filters (mandatory, review) only choose the
+// rows shown.
+func (s *server) optimizeData(r *http.Request, problem string) (optimizeData, error) {
+	ctx := r.Context()
+	d := optimizeData{Error: problem, Mandatory: mandatoryHide, Review: r.FormValue("review")}
+	if r.FormValue("mandatory") == mandatoryShow {
+		d.Mandatory = mandatoryShow
+	}
+	if !slices.Contains(reviewFilters, d.Review) {
+		d.Review = reviewAll
+	}
+	var err error
+	if d.AsOf, err = s.st.LatestDate(ctx); err != nil {
+		return d, err
+	}
+	costs, err := s.st.ListRecurringCosts(ctx, d.AsOf)
+	if err != nil {
+		return d, err
+	}
+	var rows []optimizeRow
+	for _, c := range costs {
+		monthly, ok := c.MonthlyCents()
+		if !ok {
+			if c.Active && c.Count > 0 && c.LastCents < 0 {
+				d.Unknown++
+			}
+			continue
+		}
+		if c.LastCents >= 0 {
+			continue
+		}
+		yearly, _ := c.YearlyCents()
+		d.MonthlyCents += monthly
+		d.YearlyCents += yearly
+		switch {
+		case c.Mandatory:
+			d.MandatoryCount++
+			d.MandatoryMonthly += monthly
+		case c.Verdict == store.VerdictCancel:
+			d.SavingMonthly += monthly
+			d.SavingYearly += yearly
+		case c.Verdict == "":
+			d.UndecidedCount++
+			d.UndecidedMonthly += monthly
+		}
+		if c.Mandatory && d.Mandatory == mandatoryHide {
+			d.Hidden++
+			continue
+		}
+		if d.Review != reviewAll && c.Verdict != reviewVerdicts[d.Review] {
+			continue
+		}
+		rows = append(rows, optimizeRow{RecurringCost: c, MonthlyCents: monthly, YearlyCents: yearly})
+	}
+	d.Categories = optimizeCategories(rows, d.YearlyCents)
+	d.Inbox, err = s.st.CountUncategorized(ctx)
+	return d, err
+}
+
+func (s *server) optimize(w http.ResponseWriter, r *http.Request) {
+	d, err := s.optimizeData(r, "")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, optimizePage(d))
 }
 
 // --- reserve ----------------------------------------------------------------

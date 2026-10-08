@@ -129,6 +129,7 @@ func TestPagesRender(t *testing.T) {
 			"/categories":                         "Categories",
 			"/reserve":                            "Reserve account",
 			"/recurring":                          "New group",
+			"/optimize":                           "Recurring per month",
 			"/transactions?recurring=any":         "All recurring",
 			"/import":                             "Finanzguru export",
 			"/static/app.js":                      "tx-row",
@@ -644,6 +645,121 @@ func TestRecurring(t *testing.T) {
 	}
 	if got := rows("status=reserve"); got != 0 {
 		t.Errorf("status=reserve lists %d rows after the group is gone", got)
+	}
+}
+
+func TestOptimize(t *testing.T) {
+	e := newEnv(t, true)
+	groupID := func(name string) string {
+		return e.text(`SELECT id FROM recurring_groups WHERE name = ?`, name)
+	}
+	// Besides the two contracts of the import (rent 1234.56 and broadcasting
+	// fee 18.36, both monthly): an income and a group of unknown interval.
+	e.post("/api/recurring", url.Values{"ids": {e.txID("fg-0001")}, "name": {"Lohn"}})
+	e.post("/recurring/"+groupID("Lohn")+"/interval", url.Values{"interval": {"monthly"}})
+	e.post("/api/recurring", url.Values{"ids": {e.txID("fg-0002")}, "name": {"Wocheneinkauf"}})
+	rent, fee := groupID("Hausverwaltung Beispiel"), groupID("Rundfunk ARD, ZDF, DRadio")
+	const rentRow, feeRow, total = ">Hausverwaltung Beispiel</a>", ">Rundfunk ARD, ZDF, DRadio</a>", -1503504
+
+	status, body := e.get("/optimize")
+	if status != http.StatusOK {
+		t.Fatalf("GET /optimize: status %d", status)
+	}
+	for _, want := range []string{
+		rentRow, feeRow, money.FormatDE(-125292), money.FormatDE(total) + " per year", ">Wohnen</th>",
+		">99 %<", ">1 %<", "1 group of unknown interval left out", money.FormatDE(-123456), // paid in 12 months
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("optimize page lacks %q", want)
+		}
+	}
+	for _, not := range []string{">Lohn</a>", ">Wocheneinkauf</a>", "mandatory hidden"} {
+		if strings.Contains(body, not) {
+			t.Errorf("optimize page has %q", not)
+		}
+	}
+
+	optimize := func(form url.Values) url.Values {
+		form.Set("view", "optimize")
+		return form
+	}
+	steps := []struct {
+		name string
+		path string
+		form url.Values
+		want []string
+		not  []string
+	}{
+		{
+			"mandatory groups are hidden, but still counted", "/recurring/" + rent + "/mandatory", optimize(url.Values{"value": {"1"}}),
+			[]string{feeRow, "1 mandatory hidden", money.FormatDE(total) + " per year", "1 group, per month"}, []string{rentRow},
+		},
+		{
+			"and shown on request", "/recurring/" + rent + "/mandatory", optimize(url.Values{"value": {"1"}, "mandatory": {"show"}}),
+			[]string{feeRow, rentRow}, []string{"mandatory hidden"},
+		},
+		{
+			"what is marked cancel can be saved", "/recurring/" + fee + "/verdict", optimize(url.Values{"verdict": {"cancel"}}),
+			[]string{feeRow, money.FormatDE(22032), money.FormatDE(1836) + " per month, marked cancel"}, nil,
+		},
+		{
+			"review filter", "/recurring/" + fee + "/verdict", optimize(url.Values{"verdict": {"cancel"}, "review": {"keep"}}),
+			[]string{"No recurring expenses to show"}, []string{feeRow},
+		},
+		{
+			"a mandatory group is not cancelled", "/recurring/" + rent + "/verdict", optimize(url.Values{"verdict": {"cancel"}}),
+			[]string{"cannot be cancelled"}, nil,
+		},
+		{
+			"unknown verdict", "/recurring/" + fee + "/verdict", optimize(url.Values{"verdict": {"maybe"}}),
+			[]string{"unknown verdict", money.FormatDE(22032)}, nil,
+		},
+		{
+			"unknown group", "/recurring/999/verdict", optimize(url.Values{"verdict": {"keep"}}),
+			[]string{"no longer exists"}, nil,
+		},
+	}
+	for _, step := range steps {
+		status, body, _ := e.post(step.path, step.form)
+		if status != http.StatusOK || !strings.HasPrefix(body, `<div id="optimize"`) {
+			t.Errorf("%s: status %d, body is not the optimize section", step.name, status)
+		}
+		for _, want := range step.want {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: section lacks %q", step.name, want)
+			}
+		}
+		for _, not := range step.not {
+			if strings.Contains(body, not) {
+				t.Errorf("%s: section has %q", step.name, not)
+			}
+		}
+	}
+
+	for query, want := range map[string][2]bool{ // rent, fee
+		"": {false, true}, "mandatory=show": {true, true}, "mandatory=show&review=cancel": {false, true},
+		"mandatory=show&review=undecided": {true, false}, "review=nonsense": {false, true},
+	} {
+		_, body := e.get("/optimize?" + query)
+		if got := [2]bool{strings.Contains(body, rentRow), strings.Contains(body, feeRow)}; got != want {
+			t.Errorf("/optimize?%s shows rent, fee = %v, want %v", query, got, want)
+		}
+	}
+
+	// The Recurring page has the flag as well; switching it on there drops
+	// the verdict "cancel".
+	status, body, _ = e.post("/recurring/"+fee+"/mandatory", url.Values{"value": {"1"}})
+	if status != http.StatusOK || !strings.HasPrefix(body, `<div id="recurring"`) || !strings.Contains(body, "<th>Mandatory</th>") {
+		t.Errorf("mandatory from the Recurring page: status %d, body is not its list", status)
+	}
+	if got := e.text(`SELECT mandatory || '|' || COALESCE(verdict, '-') FROM recurring_groups WHERE id = ?`, fee); got != "1|-" {
+		t.Errorf("fee after mandatory: %s, want 1|-", got)
+	}
+
+	// A group that has ended is no longer a cost.
+	e.post("/recurring/"+rent+"/active", url.Values{})
+	if _, body = e.get("/optimize?mandatory=show"); strings.Contains(body, rentRow) || !strings.Contains(body, money.FormatDE(-22032)+" per year") {
+		t.Error("an inactive group is still counted on the optimize page")
 	}
 }
 

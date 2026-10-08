@@ -1,7 +1,9 @@
 package web
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -49,6 +51,137 @@ func intervalLabel(interval string) string {
 		return "Yearly"
 	}
 	return "Not known"
+}
+
+// Values of the Optimize page's filters.
+const (
+	mandatoryHide = "hide"
+	mandatoryShow = "show"
+
+	reviewAll       = "all"
+	reviewUndecided = "undecided"
+)
+
+var reviewFilters = []string{reviewAll, reviewUndecided, store.VerdictKeep, store.VerdictCancel}
+
+// reviewVerdicts maps a review filter to the verdict it selects.
+var reviewVerdicts = map[string]string{
+	reviewUndecided: "", store.VerdictKeep: store.VerdictKeep, store.VerdictCancel: store.VerdictCancel,
+}
+
+func reviewLabel(filter string) string {
+	switch filter {
+	case reviewUndecided:
+		return "Undecided"
+	case store.VerdictKeep:
+		return "Keep"
+	case store.VerdictCancel:
+		return "Cancel"
+	}
+	return "All"
+}
+
+// optimizeData is the review of the running recurring expenses. The totals
+// cover every such group, whatever the filters show.
+type optimizeData struct {
+	Categories []optimizeCategory
+	// MonthlyCents and YearlyCents sum all groups considered.
+	MonthlyCents int64
+	YearlyCents  int64
+	// Mandatory groups cannot be cancelled.
+	MandatoryCount   int
+	MandatoryMonthly int64
+	// Saving sums the groups marked "cancel".
+	SavingMonthly int64
+	SavingYearly  int64
+	// Undecided groups are neither mandatory nor have a verdict.
+	UndecidedCount   int
+	UndecidedMonthly int64
+	// Unknown counts the active expense groups left out because their
+	// interval is not known, Hidden the mandatory ones filtered out.
+	Unknown int
+	Hidden  int
+	// The filters: mandatoryHide or mandatoryShow, and one of reviewFilters.
+	Mandatory string
+	Review    string
+	AsOf      string
+	Error     string
+	Inbox     int
+}
+
+// optimizeCategory is the groups mostly booked to one main category.
+type optimizeCategory struct {
+	Name         string
+	MonthlyCents int64
+	YearlyCents  int64
+	Rows         []optimizeRow
+}
+
+type optimizeRow struct {
+	store.RecurringCost
+	MonthlyCents int64
+	YearlyCents  int64
+	// Share is the group's part of all recurring expenses, in percent.
+	Share int64
+}
+
+// optimizeCategories sorts the rows into their categories, the most
+// expensive category and, within each, the most expensive group first.
+func optimizeCategories(rows []optimizeRow, totalYearly int64) []optimizeCategory {
+	var categories []optimizeCategory
+	index := map[int64]int{}
+	for _, row := range rows {
+		if totalYearly != 0 {
+			row.Share = roundDiv(-row.YearlyCents*100, -totalYearly)
+		}
+		i, ok := index[row.CategoryID]
+		if !ok {
+			i = len(categories)
+			index[row.CategoryID] = i
+			name := row.CategoryName
+			if row.CategoryID == 0 {
+				name = "Uncategorized"
+			}
+			categories = append(categories, optimizeCategory{Name: name})
+		}
+		categories[i].MonthlyCents += row.MonthlyCents
+		categories[i].YearlyCents += row.YearlyCents
+		categories[i].Rows = append(categories[i].Rows, row)
+	}
+	// Costs are negative: the smallest number is the most expensive.
+	slices.SortStableFunc(categories, func(a, b optimizeCategory) int {
+		return cmp.Or(cmp.Compare(a.YearlyCents, b.YearlyCents), cmp.Compare(a.Name, b.Name))
+	})
+	for _, c := range categories {
+		slices.SortStableFunc(c.Rows, func(a, b optimizeRow) int {
+			return cmp.Or(cmp.Compare(a.YearlyCents, b.YearlyCents), cmp.Compare(a.Name, b.Name))
+		})
+	}
+	return categories
+}
+
+// changeLabel says how the price moved since the payment compared with, ""
+// if there is none. more is true if the group got more expensive.
+func (r optimizeRow) changeLabel() (label string, more bool) {
+	change, ok := r.ChangeCents()
+	switch {
+	case !ok:
+		return "", false
+	case change == 0:
+		return "same as on " + dateDE(r.PrevDate), false
+	case change < 0:
+		return "+" + money.FormatDE(-change) + " since " + dateDE(r.PrevDate), true
+	default:
+		return money.FormatDE(-change) + " since " + dateDE(r.PrevDate), false
+	}
+}
+
+// cancelTitle explains the Cancel button of a group.
+func cancelTitle(mandatory bool) string {
+	if mandatory {
+		return "A mandatory group cannot be cancelled"
+	}
+	return "Mark to be cancelled"
 }
 
 // Values of the list's "recurring" filter besides a group id.

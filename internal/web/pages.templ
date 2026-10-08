@@ -422,6 +422,142 @@ templ reservePage(d reserveData) {
 	}
 }
 
+templ optimizePage(d optimizeData) {
+	@layout("Optimize", "optimize", d.Inbox) {
+		<h1 class="text-2xl font-semibold mb-1">Optimize</h1>
+		<p class="text-sm text-base-content/70 mb-4">
+			What the running <a class="link" href="/recurring">recurring groups</a> cost, to decide which are still needed.
+			Mark what cannot be cancelled as mandatory, and the rest as keep or cancel.
+			Once something is really cancelled, switch its group to inactive on the Recurring page.
+			if d.AsOf != "" {
+				Calculated as of { dateDE(d.AsOf) }, the newest imported transaction.
+			}
+		</p>
+		@optimizeSection(d)
+	}
+}
+
+templ optimizeSection(d optimizeData) {
+	<div id="optimize">
+		if d.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
+		}
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+			@statTile("Recurring per month", money.FormatDE(d.MonthlyCents), money.FormatDE(d.YearlyCents)+" per year")
+			@statTile("Mandatory", money.FormatDE(d.MandatoryMonthly), plural(d.MandatoryCount, "group", "groups")+", per month")
+			@statTile("Can be saved per year", money.FormatDE(-d.SavingYearly), money.FormatDE(-d.SavingMonthly)+" per month, marked cancel")
+			@statTile("Undecided", strconv.Itoa(d.UndecidedCount), money.FormatDE(d.UndecidedMonthly)+" per month")
+		</div>
+		<form id="optimize-filter" action="/optimize" method="get" class="bg-base-100 rounded-box border border-base-300 p-3 mb-3 flex flex-wrap gap-3 items-end">
+			<label class="flex flex-col gap-1 text-xs">
+				Mandatory
+				<select name="mandatory" class="select select-sm" onchange="this.form.submit()">
+					<option value={ mandatoryHide } selected?={ d.Mandatory == mandatoryHide }>Hide</option>
+					<option value={ mandatoryShow } selected?={ d.Mandatory == mandatoryShow }>Show</option>
+				</select>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Review
+				<select name="review" class="select select-sm" onchange="this.form.submit()">
+					for _, f := range reviewFilters {
+						<option value={ f } selected?={ f == d.Review }>{ reviewLabel(f) }</option>
+					}
+				</select>
+			</label>
+			<noscript><button class="btn btn-sm">Filter</button></noscript>
+			<p class="ml-auto text-sm text-base-content/70">
+				if d.Hidden > 0 {
+					{ strconv.Itoa(d.Hidden) } mandatory hidden
+				}
+				if d.Hidden > 0 && d.Unknown > 0 {
+					·
+				}
+				if d.Unknown > 0 {
+					{ plural(d.Unknown, "group", "groups") } of unknown interval left out, <a class="link" href="/recurring">set it</a>
+				}
+			</p>
+		</form>
+		if len(d.Categories) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+				No recurring expenses to show. Groups are managed on the <a class="link" href="/recurring">Recurring page</a>; an expense counts here once its group is active and has an interval.
+			</div>
+		} else {
+			<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Name</th><th>Interval</th><th class="text-right">Per month</th><th class="text-right">Per year</th>
+							<th class="text-right">Share</th><th class="text-right">Paid in 12 months</th><th>Price change</th><th>Mandatory</th><th>Review</th>
+						</tr>
+					</thead>
+					for _, c := range d.Categories {
+						<tbody>
+							<tr class="bg-base-200">
+								<th colspan="2">{ c.Name }</th>
+								<th class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(c.MonthlyCents) }</th>
+								<th class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(c.YearlyCents) }</th>
+								<th colspan="5"></th>
+							</tr>
+							for _, g := range c.Rows {
+								@optimizeGroup(g, d.AsOf)
+							}
+						</tbody>
+					}
+				</table>
+			</div>
+		}
+	</div>
+}
+
+templ optimizeGroup(g optimizeRow, asOf string) {
+	<tr>
+		<td class="font-medium">
+			<a class="link link-hover" href={ templ.SafeURL("/transactions?recurring=" + itoa(g.ID)) } title={ plural(g.Count, "transaction", "transactions") + ", last on " + dateDE(g.LastDate) }>{ g.Name }</a>
+			if g.Lapsed(asOf) {
+				<span class="badge badge-xs badge-warning badge-soft ml-1" title="No payment for more than two intervals. If it has ended, switch it to inactive on the Recurring page.">ended?</span>
+			}
+		</td>
+		<td>{ intervalLabel(g.Interval) }</td>
+		<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.MonthlyCents) }</td>
+		<td class="text-right whitespace-nowrap tabular-nums font-medium">{ money.FormatDE(g.YearlyCents) }</td>
+		<td class="text-right whitespace-nowrap tabular-nums">{ itoa(g.Share) } %</td>
+		<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.PaidYearCents) }</td>
+		<td class="whitespace-nowrap">
+			if label, more := g.changeLabel(); label == "" {
+				<span class="text-base-content/50">–</span>
+			} else if more {
+				<span class="badge badge-sm badge-warning badge-soft">{ label }</span>
+			} else {
+				<span class="text-base-content/70">{ label }</span>
+			}
+		</td>
+		<td>
+			<input
+				type="checkbox"
+				name="value"
+				value="1"
+				class="checkbox checkbox-sm"
+				checked?={ g.Mandatory }
+				aria-label={ g.Name + " is mandatory" }
+				title="Cannot be cancelled, such as a loan"
+				hx-post={ "/recurring/" + itoa(g.ID) + "/mandatory" }
+				hx-vals='{"view": "optimize"}'
+				hx-include="#optimize-filter"
+				hx-target="#optimize"
+				hx-swap="outerHTML"
+			/>
+		</td>
+		<td>
+			<form class="join" hx-post={ "/recurring/" + itoa(g.ID) + "/verdict" } hx-include="#optimize-filter" hx-target="#optimize" hx-swap="outerHTML">
+				<input type="hidden" name="view" value="optimize"/>
+				<button name="verdict" value={ store.VerdictKeep } class={ "join-item btn btn-xs", templ.KV("btn-success", g.Verdict == store.VerdictKeep) } aria-pressed?={ g.Verdict == store.VerdictKeep }>Keep</button>
+				<button name="verdict" value={ store.VerdictCancel } class={ "join-item btn btn-xs", templ.KV("btn-error", g.Verdict == store.VerdictCancel) } aria-pressed?={ g.Verdict == store.VerdictCancel } disabled?={ g.Mandatory } title={ cancelTitle(g.Mandatory) }>Cancel</button>
+				<button name="verdict" value="" class="join-item btn btn-xs" disabled?={ g.Verdict == "" } aria-label={ "Clear the verdict for " + g.Name } title="Undecided">–</button>
+			</form>
+		</td>
+	</tr>
+}
+
 templ recurringPage(d recurringData) {
 	@layout("Recurring", "recurring", d.Inbox) {
 		<h1 class="text-2xl font-semibold mb-1">Recurring</h1>
@@ -474,7 +610,7 @@ templ recurringSection(d recurringData) {
 					<thead>
 						<tr>
 							<th>Active</th><th>Name</th><th>Interval</th><th class="text-right">Transactions</th><th>Last</th>
-							<th class="text-right">Last amount</th><th class="text-right">Per month</th><th>Reserve</th><th>Merge into</th><th></th>
+							<th class="text-right">Last amount</th><th class="text-right">Per month</th><th>Reserve</th><th>Mandatory</th><th>Merge into</th><th></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -540,6 +676,20 @@ templ recurringSection(d recurringData) {
 										aria-label={ "Cover " + g.Name + " by the reserve" }
 										title="Count this group's transactions as irregular expenses for the reserve"
 										hx-post={ "/recurring/" + itoa(g.ID) + "/reserve" }
+										hx-target="#recurring"
+										hx-swap="outerHTML"
+									/>
+								</td>
+								<td>
+									<input
+										type="checkbox"
+										name="value"
+										value="1"
+										class="checkbox checkbox-sm"
+										checked?={ g.Mandatory }
+										aria-label={ g.Name + " is mandatory" }
+										title="Cannot be cancelled, such as a loan. Left out when costs are reviewed on the Optimize page."
+										hx-post={ "/recurring/" + itoa(g.ID) + "/mandatory" }
 										hx-target="#recurring"
 										hx-swap="outerHTML"
 									/>
