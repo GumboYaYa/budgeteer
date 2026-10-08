@@ -130,6 +130,7 @@ func TestPagesRender(t *testing.T) {
 			"/reserve":                            "Reserve account",
 			"/recurring":                          "New group",
 			"/optimize":                           "Recurring per month",
+			"/optimize?tab=increases":             "Nothing got more expensive",
 			"/transactions?recurring=any":         "All recurring",
 			"/import":                             "Finanzguru export",
 			"/static/app.js":                      "tx-row",
@@ -760,6 +761,101 @@ func TestOptimize(t *testing.T) {
 	e.post("/recurring/"+rent+"/active", url.Values{})
 	if _, body = e.get("/optimize?mandatory=show"); strings.Contains(body, rentRow) || !strings.Contains(body, money.FormatDE(-22032)+" per year") {
 		t.Error("an inactive group is still counted on the optimize page")
+	}
+}
+
+func TestIncreases(t *testing.T) {
+	e := newEnv(t, true)
+	ctx := context.Background()
+	// The contracts of the import have one payment each and nothing to
+	// compare. These groups have two.
+	groups := []struct {
+		name, interval    string
+		before, now       int64
+		mandatory, active bool
+	}{
+		{"Strom", store.IntervalMonthly, -5000, -6000, false, true},    // +10.00, 120.00 per year
+		{"Kredit", store.IntervalYearly, -100000, -105000, true, true}, // +50.00 per year
+		{"Gleich", store.IntervalMonthly, -700, -700, false, true},
+		{"Billiger", store.IntervalMonthly, -900, -800, false, true},
+		{"Nebenjob", store.IntervalMonthly, 20000, 21000, false, true}, // income
+		{"Beendet", store.IntervalMonthly, -100, -300, false, false},
+		{"Unbekannt", "", -100, -300, false, true},
+	}
+	ids := map[string]string{}
+	for i, g := range groups {
+		id, err := e.st.EnsureRecurringGroup(ctx, g.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[g.name] = strconv.FormatInt(id, 10)
+		for name, err := range map[string]error{
+			"interval": e.st.SetRecurringInterval(ctx, id, g.interval), "mandatory": e.st.SetRecurringMandatory(ctx, id, g.mandatory),
+			"active": e.st.SetRecurringActive(ctx, id, g.active),
+		} {
+			if err != nil {
+				t.Fatalf("%s: %s: %v", g.name, name, err)
+			}
+		}
+		for j, x := range []struct {
+			date  string
+			cents int64
+		}{{"2025-09-01", g.before}, {"2026-09-01", g.now}} {
+			if _, err := e.st.DB.Exec(`
+				INSERT INTO transactions (account_id, raw_record_id, source, dedup_key, booking_date, amount_cents, recurring_group_id)
+				SELECT min(account_id), min(raw_record_id), 'test', ?, ?, ?, ? FROM transactions`,
+				"test-"+strconv.Itoa(i)+"-"+strconv.Itoa(j), x.date, x.cents, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	status, body := e.get("/optimize?tab=increases")
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	for _, want := range []string{
+		`<div id="increases">`, ">Strom</a>", ">Kredit</a>", `badge-ghost ml-1">mandatory</span>`,
+		"+" + money.FormatDE(1000), "+20 %", "+" + money.FormatDE(12000), "+5 %",
+		money.FormatDE(17000), "2 groups got more expensive", // in total
+		money.FormatDE(5000), "1 group", // mandatory
+		`text-2xl font-semibold tabular-nums">4<`, // compared
+		`class="tab tab-active" aria-selected>Price increases`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("price increases lack %q", want)
+		}
+	}
+	for _, not := range []string{">Gleich</a>", ">Billiger</a>", ">Nebenjob</a>", ">Beendet</a>", ">Unbekannt</a>", `<div id="optimize">`} {
+		if strings.Contains(body, not) {
+			t.Errorf("price increases have %q", not)
+		}
+	}
+	if strings.Index(body, ">Strom</a>") > strings.Index(body, ">Kredit</a>") {
+		t.Error("the rise that costs most per year is not listed first")
+	}
+
+	// Verdicts set here come back as this tab.
+	steps := []struct {
+		name, group, verdict, want string
+	}{
+		{"keep", "Strom", "keep", "btn-success"},
+		{"a mandatory group is not cancelled", "Kredit", "cancel", "cannot be cancelled"},
+	}
+	for _, step := range steps {
+		status, body, _ := e.post("/recurring/"+ids[step.group]+"/verdict",
+			url.Values{"verdict": {step.verdict}, "view": {"optimize"}, "tab": {"increases"}})
+		if status != http.StatusOK || !strings.HasPrefix(body, `<div id="increases">`) || !strings.Contains(body, step.want) {
+			t.Errorf("%s: status %d, section lacks %q or is not the tab's", step.name, status, step.want)
+		}
+	}
+
+	for _, path := range []string{"/optimize", "/optimize?tab=nonsense"} {
+		_, body := e.get(path)
+		if !strings.Contains(body, `<div id="optimize">`) || strings.Contains(body, `<div id="increases">`) ||
+			!strings.Contains(body, `class="tab tab-active" aria-selected>Costs`) {
+			t.Errorf("GET %s does not show the Costs tab", path)
+		}
 	}
 }
 

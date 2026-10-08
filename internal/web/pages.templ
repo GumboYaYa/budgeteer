@@ -422,9 +422,23 @@ templ reservePage(d reserveData) {
 	}
 }
 
-templ optimizePage(d optimizeData) {
+templ optimizePage(d optimizePageData) {
 	@layout("Optimize", "optimize", d.Inbox) {
-		<h1 class="text-2xl font-semibold mb-1">Optimize</h1>
+		<h1 class="text-2xl font-semibold mb-2">Optimize</h1>
+		<div role="tablist" class="tabs tabs-border mb-3">
+			<a role="tab" href="/optimize" class={ "tab", templ.KV("tab-active", d.Tab == tabCosts) } aria-selected?={ d.Tab == tabCosts }>Costs</a>
+			<a role="tab" href={ templ.SafeURL("/optimize?tab=" + tabIncreases) } class={ "tab", templ.KV("tab-active", d.Tab == tabIncreases) } aria-selected?={ d.Tab == tabIncreases }>Price increases</a>
+		</div>
+		if d.Tab == tabIncreases {
+			@increasesSection(d.Increases)
+		} else {
+			@optimizeSection(d.Costs)
+		}
+	}
+}
+
+templ optimizeSection(d optimizeData) {
+	<div id="optimize">
 		<p class="text-sm text-base-content/70 mb-4">
 			What the running <a class="link" href="/recurring">recurring groups</a> cost, to decide which are still needed.
 			Mark what cannot be cancelled as mandatory, and the rest as keep or cancel.
@@ -433,12 +447,6 @@ templ optimizePage(d optimizeData) {
 				Calculated as of { dateDE(d.AsOf) }, the newest imported transaction.
 			}
 		</p>
-		@optimizeSection(d)
-	}
-}
-
-templ optimizeSection(d optimizeData) {
-	<div id="optimize">
 		if d.Error != "" {
 			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
 		}
@@ -548,14 +556,94 @@ templ optimizeGroup(g optimizeRow, asOf string) {
 			/>
 		</td>
 		<td>
-			<form class="join" hx-post={ "/recurring/" + itoa(g.ID) + "/verdict" } hx-include="#optimize-filter" hx-target="#optimize" hx-swap="outerHTML">
-				<input type="hidden" name="view" value="optimize"/>
-				<button name="verdict" value={ store.VerdictKeep } class={ "join-item btn btn-xs", templ.KV("btn-success", g.Verdict == store.VerdictKeep) } aria-pressed?={ g.Verdict == store.VerdictKeep }>Keep</button>
-				<button name="verdict" value={ store.VerdictCancel } class={ "join-item btn btn-xs", templ.KV("btn-error", g.Verdict == store.VerdictCancel) } aria-pressed?={ g.Verdict == store.VerdictCancel } disabled?={ g.Mandatory } title={ cancelTitle(g.Mandatory) }>Cancel</button>
-				<button name="verdict" value="" class="join-item btn btn-xs" disabled?={ g.Verdict == "" } aria-label={ "Clear the verdict for " + g.Name } title="Undecided">–</button>
-			</form>
+@verdictButtons(g.RecurringGroup, tabCosts)
 		</td>
 	</tr>
+}
+
+// verdictButtons set the verdict of a group from a tab of the Optimize page.
+templ verdictButtons(g store.RecurringGroup, tab string) {
+	<form class="join" hx-post={ "/recurring/" + itoa(g.ID) + "/verdict" } hx-include="#optimize-filter" hx-target={ tabTarget(tab) } hx-swap="outerHTML">
+		<input type="hidden" name="view" value="optimize"/>
+		<input type="hidden" name="tab" value={ tab }/>
+		<button name="verdict" value={ store.VerdictKeep } class={ "join-item btn btn-xs", templ.KV("btn-success", g.Verdict == store.VerdictKeep) } aria-pressed?={ g.Verdict == store.VerdictKeep }>Keep</button>
+		<button name="verdict" value={ store.VerdictCancel } class={ "join-item btn btn-xs", templ.KV("btn-error", g.Verdict == store.VerdictCancel) } aria-pressed?={ g.Verdict == store.VerdictCancel } disabled?={ g.Mandatory } title={ cancelTitle(g.Mandatory) }>Cancel</button>
+		<button name="verdict" value="" class="join-item btn btn-xs" disabled?={ g.Verdict == "" } aria-label={ "Clear the verdict for " + g.Name } title="Undecided">–</button>
+	</form>
+}
+
+templ increasesSection(d increasesData) {
+	<div id="increases">
+		<p class="text-sm text-base-content/70 mb-4">
+			Running <a class="link" href="/recurring">recurring groups</a> that got more expensive: the newest payment against the one about a year earlier, or against the first one of a younger group.
+			Mandatory groups are listed too, since a loan, an insurance or a bank account can be moved to a better offer.
+			if d.AsOf != "" {
+				Calculated as of { dateDE(d.AsOf) }, the newest imported transaction.
+			}
+		</p>
+		if d.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
+		}
+		<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+			@statTile("More per year", money.FormatDE(d.ExtraYearly), plural(len(d.Rows), "group", "groups")+" got more expensive")
+			@statTile("Of that mandatory", money.FormatDE(d.MandatoryExtra), plural(d.MandatoryCount, "group", "groups"))
+			@statTile("Compared", strconv.Itoa(d.Compared), "running expenses with an earlier payment")
+		</div>
+		if len(d.Rows) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+				Nothing got more expensive. A group is compared once it has two payments, is active and has an interval.
+			</div>
+		} else {
+			<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Name</th><th>Category</th><th>Interval</th><th class="text-right">Before</th><th class="text-right">Now</th>
+							<th class="text-right">Increase</th><th class="text-right">More per year</th><th>Review</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, g := range d.Rows {
+							<tr>
+								<td class="font-medium">
+									<a class="link link-hover" href={ templ.SafeURL("/transactions?recurring=" + itoa(g.ID)) } title={ plural(g.Count, "transaction", "transactions") }>{ g.Name }</a>
+									if g.Mandatory {
+										<span class="badge badge-xs badge-ghost ml-1">mandatory</span>
+									}
+								</td>
+								<td>
+									if g.CategoryID == 0 {
+										<span class="text-base-content/50">Uncategorized</span>
+									} else {
+										{ g.CategoryName }
+									}
+								</td>
+								<td>{ intervalLabel(g.Interval) }</td>
+								<td class="text-right whitespace-nowrap tabular-nums">
+									{ money.FormatDE(g.PrevCents) }
+									<div class="text-xs text-base-content/60">{ dateDE(g.PrevDate) }</div>
+								</td>
+								<td class="text-right whitespace-nowrap tabular-nums">
+									{ money.FormatDE(g.LastCents) }
+									<div class="text-xs text-base-content/60">{ dateDE(g.LastDate) }</div>
+								</td>
+								<td class="text-right whitespace-nowrap tabular-nums">
+									+{ money.FormatDE(g.RiseCents) }
+									if g.Percent > 0 {
+										<div class="text-xs text-base-content/60">+{ itoa(g.Percent) } %</div>
+									}
+								</td>
+								<td class="text-right whitespace-nowrap tabular-nums font-medium">+{ money.FormatDE(g.ExtraYearly) }</td>
+								<td>
+									@verdictButtons(g.RecurringGroup, tabIncreases)
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
 }
 
 templ recurringPage(d recurringData) {

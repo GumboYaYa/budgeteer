@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"errors"
 	"net/http"
 	"net/url"
@@ -513,7 +514,7 @@ func (s *server) recurring(w http.ResponseWriter, r *http.Request) {
 // recurringAction runs a change on the group in the path (0 if the path has
 // none) and re-renders the group list, with the error shown above it if the
 // change was refused. Posted from the Optimize page (view=optimize), it
-// re-renders that page's content instead.
+// re-renders the content of that page's tab instead.
 func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change func(id int64) error) {
 	problem := ""
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -527,6 +528,15 @@ func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change 
 			s.fail(w, r, err)
 			return
 		}
+	}
+	if r.FormValue("view") == "optimize" && r.FormValue("tab") == tabIncreases {
+		d, err := s.increasesData(r, problem)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.render(w, r, increasesSection(d))
+		return
 	}
 	if r.FormValue("view") == "optimize" {
 		d, err := s.optimizeData(r, problem)
@@ -632,17 +642,13 @@ func (s *server) optimizeData(r *http.Request, problem string) (optimizeData, er
 	}
 	var rows []optimizeRow
 	for _, c := range costs {
-		monthly, ok := c.MonthlyCents()
+		monthly, yearly, ok := runningExpense(c.RecurringGroup)
 		if !ok {
 			if c.Active && c.Count > 0 && c.LastCents < 0 {
 				d.Unknown++
 			}
 			continue
 		}
-		if c.LastCents >= 0 {
-			continue
-		}
-		yearly, _ := c.YearlyCents()
 		d.MonthlyCents += monthly
 		d.YearlyCents += yearly
 		switch {
@@ -666,12 +672,65 @@ func (s *server) optimizeData(r *http.Request, problem string) (optimizeData, er
 		rows = append(rows, optimizeRow{RecurringCost: c, MonthlyCents: monthly, YearlyCents: yearly})
 	}
 	d.Categories = optimizeCategories(rows, d.YearlyCents)
-	d.Inbox, err = s.st.CountUncategorized(ctx)
-	return d, err
+	return d, nil
 }
 
+// increasesData collects the running expenses that got more expensive,
+// mandatory ones included, the rise that costs most per year first.
+func (s *server) increasesData(r *http.Request, problem string) (increasesData, error) {
+	ctx := r.Context()
+	d := increasesData{Error: problem}
+	var err error
+	if d.AsOf, err = s.st.LatestDate(ctx); err != nil {
+		return d, err
+	}
+	costs, err := s.st.ListRecurringCosts(ctx, d.AsOf)
+	if err != nil {
+		return d, err
+	}
+	for _, c := range costs {
+		if _, _, ok := runningExpense(c.RecurringGroup); !ok {
+			continue
+		}
+		change, ok := c.ChangeCents()
+		if !ok {
+			continue
+		}
+		d.Compared++
+		if change >= 0 {
+			continue
+		}
+		yearly, _ := c.YearlyChangeCents()
+		row := increaseRow{RecurringCost: c, RiseCents: -change, ExtraYearly: -yearly}
+		if c.PrevCents < 0 {
+			row.Percent = roundDiv(-change*100, -c.PrevCents)
+		}
+		d.ExtraYearly += row.ExtraYearly
+		if c.Mandatory {
+			d.MandatoryCount++
+			d.MandatoryExtra += row.ExtraYearly
+		}
+		d.Rows = append(d.Rows, row)
+	}
+	slices.SortStableFunc(d.Rows, func(a, b increaseRow) int {
+		return cmp.Or(cmp.Compare(b.ExtraYearly, a.ExtraYearly), cmp.Compare(a.Name, b.Name))
+	})
+	return d, nil
+}
+
+// optimize shows one of the page's two tabs.
 func (s *server) optimize(w http.ResponseWriter, r *http.Request) {
-	d, err := s.optimizeData(r, "")
+	d := optimizePageData{Tab: tabCosts}
+	var err error
+	if r.FormValue("tab") == tabIncreases {
+		d.Tab = tabIncreases
+		d.Increases, err = s.increasesData(r, "")
+	} else {
+		d.Costs, err = s.optimizeData(r, "")
+	}
+	if err == nil {
+		d.Inbox, err = s.st.CountUncategorized(r.Context())
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return

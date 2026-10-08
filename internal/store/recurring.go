@@ -294,6 +294,17 @@ func (c RecurringCost) ChangeCents() (cents int64, ok bool) {
 	return c.LastCents - c.PrevCents, true
 }
 
+// YearlyChangeCents is ChangeCents for a whole year of payments; ok is false
+// as well if the group is inactive or its interval is not known.
+func (c RecurringCost) YearlyChangeCents() (cents int64, ok bool) {
+	months := int64(IntervalMonths(c.Interval))
+	change, ok := c.ChangeCents()
+	if !c.Active || months == 0 || !ok {
+		return 0, false
+	}
+	return change * (12 / months), true
+}
+
 // ListRecurringCosts returns all groups as ListRecurringGroups does, with
 // their cost figures as of asOf (YYYY-MM-DD).
 func (s *Store) ListRecurringCosts(ctx context.Context, asOf string) ([]RecurringCost, error) {

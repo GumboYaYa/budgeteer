@@ -106,7 +106,64 @@ type optimizeData struct {
 	Review    string
 	AsOf      string
 	Error     string
+}
+
+// Tabs of the Optimize page.
+const (
+	tabCosts     = "costs"
+	tabIncreases = "increases"
+)
+
+// optimizePageData holds the data of the tab shown; the other stays empty.
+type optimizePageData struct {
+	Tab       string
+	Costs     optimizeData
+	Increases increasesData
 	Inbox     int
+}
+
+// tabTarget is the element a change made on a tab re-renders.
+func tabTarget(tab string) string {
+	if tab == tabIncreases {
+		return "#increases"
+	}
+	return "#optimize"
+}
+
+// runningExpense reports whether a group is a cost that is still paid: it
+// is active, has an interval and its newest transaction is an outflow.
+func runningExpense(g store.RecurringGroup) (monthly, yearly int64, ok bool) {
+	monthly, ok = g.MonthlyCents()
+	if !ok || g.LastCents >= 0 {
+		return 0, 0, false
+	}
+	yearly, _ = g.YearlyCents()
+	return monthly, yearly, true
+}
+
+// increasesData is the running expenses that got more expensive.
+type increasesData struct {
+	Rows []increaseRow
+	// ExtraYearly is what the rises cost per year in total, MandatoryCount
+	// and MandatoryExtra the part of the mandatory groups.
+	ExtraYearly    int64
+	MandatoryCount int
+	MandatoryExtra int64
+	// Compared counts the running expenses that have an earlier payment to
+	// compare with, risen or not.
+	Compared int
+	AsOf     string
+	Error    string
+}
+
+// increaseRow is a group whose price rose. Its figures are positive.
+type increaseRow struct {
+	store.RecurringCost
+	// RiseCents is the rise per payment, ExtraYearly per year. Percent is
+	// the rise relative to the earlier payment, 0 if that was no outflow.
+	RiseCents   int64
+	ExtraYearly int64
+	Percent     int64
 }
 
 // optimizeCategory is the groups mostly booked to one main category.

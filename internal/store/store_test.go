@@ -562,4 +562,26 @@ func TestRecurringCosts(t *testing.T) {
 			t.Errorf("%s: ChangeCents = %d, %v; want %d, %v", g.name, change, ok, g.change, g.changed)
 		}
 	}
+
+	// The change of one payment, for the payments of a year.
+	unknown, ended := byName["Streaming"], byName["Streaming"]
+	unknown.Interval, ended.Active = "", false
+	yearly := []struct {
+		name string
+		cost RecurringCost
+		want int64
+		ok   bool
+	}{
+		{"monthly", byName["Streaming"], -2400, true},
+		{"yearly", byName["Versicherung"], -2000, true},
+		{"unchanged", byName["Fitness"], 0, true},
+		{"no earlier payment", byName["Neu"], 0, false},
+		{"unknown interval", unknown, 0, false},
+		{"ended", ended, 0, false},
+	}
+	for _, tt := range yearly {
+		if got, ok := tt.cost.YearlyChangeCents(); got != tt.want || ok != tt.ok {
+			t.Errorf("YearlyChangeCents, %s = %d, %v; want %d, %v", tt.name, got, ok, tt.want, tt.ok)
+		}
+	}
 }
