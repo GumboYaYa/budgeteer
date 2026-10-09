@@ -129,7 +129,7 @@ func TestPagesRender(t *testing.T) {
 			"/categories":                         "Categories",
 			"/reserve":                            "Reserve account",
 			"/recurring":                          "New group",
-			"/optimize":                           "Recurring per month",
+			"/optimize":                           "Can be saved",
 			"/optimize?tab=increases":             "Nothing got more expensive",
 			"/transactions?recurring=any":         "All recurring",
 			"/import":                             "Finanzguru export",
@@ -164,7 +164,7 @@ func TestOverview(t *testing.T) {
 	_, body := e.get("/?month=2026-09")
 	// September: salary 2500.00 in; spending 16.45 + 18.36 + 42.00 + 9.99 + 1234.56.
 	// The two 500.00 transfers are left out.
-	for _, want := range []string{"Account balances on 12.09.2026", "2.790,91 €", "1.240,01 €", "4.030,92 €", "2.500,00 €", "-1.321,36 €", "1.178,64 €", "Wohnen", "-1.252,92 €", "Uncategorized", `"labels":["Wohnen","Freizeit","Essen `, `Trinken","Uncategorized"]`} {
+	for _, want := range []string{"Account balances on 12.09.2026", "2.790,91 €", "1.240,01 €", "4.030,92 €", "-1.321,36 €", "1.178,64 €", "Wohnen", "-1.252,92 €", "Uncategorized", `"labels":["Wohnen","Freizeit","Essen `, `Trinken","Uncategorized"]`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("overview lacks %q", want)
 		}
@@ -172,11 +172,12 @@ func TestOverview(t *testing.T) {
 	if strings.Contains(body, "Sparen") {
 		t.Error("overview shows the transfer category")
 	}
-	// One month: this month's income, and beside it the average of the six
-	// months before (nothing before September).
+	// One month: the income of the month before, which is complete, and
+	// below it the average of that month and the five before (nothing before
+	// September). The net figure stays this month's.
 	for _, want := range []string{
-		`text-emerald-600 dark:text-emerald-400">` + money.FormatDE(250000),
-		"⌀ " + money.FormatDE(0) + " over the 6 months before", "this month",
+		`<span class="">` + money.FormatDE(0), "last month, August 2026",
+		"⌀ " + money.FormatDE(0) + " last month and the 5 before", "income minus spending, this month",
 		`name="from" value="2026-09"`, `name="to" value="2026-09"`,
 		`href="/?month=2026-08" aria-label="Earlier`, `href="/?month=2026-10" aria-label="Later`,
 	} {
@@ -184,8 +185,45 @@ func TestOverview(t *testing.T) {
 			t.Errorf("overview for September lacks %q", want)
 		}
 	}
-	if _, october := e.get("/?month=2026-10"); !strings.Contains(october, "⌀ "+money.FormatDE(41667)+" over the 6 months before") {
-		t.Error("October should average September's income over six months")
+	_, october := e.get("/?month=2026-10")
+	for _, want := range []string{
+		`<span class="text-success">` + money.FormatDE(250000), "last month, September 2026",
+		"⌀ " + money.FormatDE(41667) + " last month and the 5 before",
+	} {
+		if !strings.Contains(october, want) {
+			t.Errorf("October should show September's income and its average over six months, lacks %q", want)
+		}
+	}
+	// Regular income is the income that belongs to a recurring group: none
+	// until the salary is put into one.
+	regular := func(path string) string {
+		t.Helper()
+		_, body := e.get(path)
+		_, tile, found := strings.Cut(body, `<div class="text-sm text-base-content/60">Regular income</div>`)
+		tile, _, _ = strings.Cut(tile, "Spending")
+		if !found {
+			t.Fatalf("GET %s: no regular income", path)
+		}
+		return tile
+	}
+	if tile := regular("/?month=2026-10"); !strings.Contains(tile, `<span class="">`+money.FormatDE(0)) {
+		t.Error("regular income counts income outside recurring groups")
+	}
+	e.post("/api/recurring", url.Values{"ids": {e.txID("fg-0001")}, "name": {"Gehalt"}})
+	for path, wants := range map[string][]string{
+		"/?month=2026-09": {`<span class="">` + money.FormatDE(0), "last month, August 2026"},
+		"/?month=2026-10": {
+			`<span class="text-success">` + money.FormatDE(250000), "last month, September 2026",
+			"⌀ " + money.FormatDE(41667) + " last month and the 5 before",
+		},
+		"/?from=2026-08&to=2026-10": {`<span class="text-success">` + money.FormatDE(250000), "⌀ " + money.FormatDE(83333) + " per month"},
+	} {
+		tile := regular(path)
+		for _, want := range wants {
+			if !strings.Contains(tile, want) {
+				t.Errorf("GET %s: regular income lacks %q", path, want)
+			}
+		}
 	}
 	// Without a month, the newest month with data is shown.
 	if _, body := e.get("/"); !strings.Contains(body, "September 2026") {
@@ -586,6 +624,7 @@ func TestRecurring(t *testing.T) {
 		{"/recurring/" + hausverwaltung + "/interval", url.Values{"interval": {"yearly"}}, money.FormatDE(-10288)}, // 1234.56 / 12
 		{"/recurring/" + hausverwaltung + "/interval", url.Values{"interval": {"weekly"}}, "unknown interval"},
 		{"/recurring/" + hausverwaltung + "/reserve", url.Values{"value": {"1"}}, "checked"},
+		{"/recurring/" + groupID("Rundfunk ARD, ZDF, DRadio") + "/reserve", url.Values{"value": {"1"}}, "a monthly group cannot be covered"},
 		{"/recurring", url.Values{"name": {"Versicherung"}, "interval": {"half-yearly"}}, `value="Versicherung"`},
 		{"/recurring/" + hausverwaltung + "/merge", url.Values{}, "choose the group to merge into"},
 		{"/recurring/999/delete", url.Values{}, "no longer exists"},
@@ -667,7 +706,7 @@ func TestOptimize(t *testing.T) {
 		t.Fatalf("GET /optimize: status %d", status)
 	}
 	for _, want := range []string{
-		rentRow, feeRow, money.FormatDE(-125292), money.FormatDE(total) + " per year", ">Wohnen</th>",
+		rentRow, feeRow, money.FormatDE(-125292), money.FormatDE(total) + "</span> / year", ">Wohnen</th>",
 		">99 %<", ">1 %<", "1 group of unknown interval left out", money.FormatDE(-123456), // paid in 12 months
 	} {
 		if !strings.Contains(body, want) {
@@ -693,7 +732,7 @@ func TestOptimize(t *testing.T) {
 	}{
 		{
 			"mandatory groups are hidden, but still counted", "/recurring/" + rent + "/mandatory", optimize(url.Values{"value": {"1"}}),
-			[]string{feeRow, "1 mandatory hidden", money.FormatDE(total) + " per year", "1 group, per month"}, []string{rentRow},
+			[]string{feeRow, "1 mandatory hidden", money.FormatDE(total) + "</span> / year", money.FormatDE(-1481472) + "</span> / year · 1 group"}, []string{rentRow},
 		},
 		{
 			"and shown on request", "/recurring/" + rent + "/mandatory", optimize(url.Values{"value": {"1"}, "mandatory": {"show"}}),
@@ -701,7 +740,7 @@ func TestOptimize(t *testing.T) {
 		},
 		{
 			"what is marked cancel can be saved", "/recurring/" + fee + "/verdict", optimize(url.Values{"verdict": {"cancel"}}),
-			[]string{feeRow, money.FormatDE(22032), money.FormatDE(1836) + " per month, marked cancel"}, nil,
+			[]string{feeRow, `<span class="text-success">` + money.FormatDE(1836), `<span class="text-success">` + money.FormatDE(22032) + "</span> / year · marked cancel"}, nil,
 		},
 		{
 			"review filter", "/recurring/" + fee + "/verdict", optimize(url.Values{"verdict": {"cancel"}, "review": {"keep"}}),
@@ -759,7 +798,7 @@ func TestOptimize(t *testing.T) {
 
 	// A group that has ended is no longer a cost.
 	e.post("/recurring/"+rent+"/active", url.Values{})
-	if _, body = e.get("/optimize?mandatory=show"); strings.Contains(body, rentRow) || !strings.Contains(body, money.FormatDE(-22032)+" per year") {
+	if _, body = e.get("/optimize?mandatory=show"); strings.Contains(body, rentRow) || !strings.Contains(body, money.FormatDE(-22032)+"</span> / year") {
 		t.Error("an inactive group is still counted on the optimize page")
 	}
 }
@@ -774,8 +813,8 @@ func TestIncreases(t *testing.T) {
 		before, now       int64
 		mandatory, active bool
 	}{
-		{"Strom", store.IntervalMonthly, -5000, -6000, false, true},    // +10.00, 120.00 per year
-		{"Kredit", store.IntervalYearly, -100000, -105000, true, true}, // +50.00 per year
+		{"Strom", store.IntervalMonthly, -5000, -6000, false, true},  // +20 %, 120.00 per year
+		{"Kredit", store.IntervalYearly, -10000, -15000, true, true}, // +50 %, 50.00 per year
 		{"Gleich", store.IntervalMonthly, -700, -700, false, true},
 		{"Billiger", store.IntervalMonthly, -900, -800, false, true},
 		{"Nebenjob", store.IntervalMonthly, 20000, 21000, false, true}, // income
@@ -816,7 +855,7 @@ func TestIncreases(t *testing.T) {
 	}
 	for _, want := range []string{
 		`<div id="increases">`, ">Strom</a>", ">Kredit</a>", `badge-ghost ml-1">mandatory</span>`,
-		"+" + money.FormatDE(1000), "+20 %", "+" + money.FormatDE(12000), "+5 %",
+		"+" + money.FormatDE(1000), "+20 %", "+" + money.FormatDE(12000), "+50 %",
 		money.FormatDE(17000), "2 groups got more expensive", // in total
 		money.FormatDE(5000), "1 group", // mandatory
 		`text-2xl font-semibold tabular-nums">4<`, // compared
@@ -831,8 +870,8 @@ func TestIncreases(t *testing.T) {
 			t.Errorf("price increases have %q", not)
 		}
 	}
-	if strings.Index(body, ">Strom</a>") > strings.Index(body, ">Kredit</a>") {
-		t.Error("the rise that costs most per year is not listed first")
+	if strings.Index(body, ">Kredit</a>") > strings.Index(body, ">Strom</a>") {
+		t.Error("the highest rise in percent is not listed first")
 	}
 
 	// Verdicts set here come back as this tab.

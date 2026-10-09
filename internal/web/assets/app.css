@@ -26,6 +26,13 @@
   }
 }
 
+/* HTMX puts the new content in before it removes the old. Scroll anchoring
+   would hold on to the old content meanwhile and leave the page scrolled to
+   the end once that is gone. */
+html {
+  overflow-anchor: none;
+}
+
 .chart-box {
   position: relative;
   width: 100%;

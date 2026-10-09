@@ -29,17 +29,11 @@ templ overviewPage(d overviewData) {
 				</form>
 			</div>
 		</div>
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-			<div class="bg-base-100 rounded-box border border-base-300 p-4">
-				<div class="text-sm text-base-content/60">Income</div>
-				<div class="flex flex-wrap items-baseline gap-x-3">
-					<span class="text-2xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{ money.FormatDE(d.Income) }</span>
-					<span class="text-xs text-base-content/60 tabular-nums">⌀ { money.FormatDE(d.IncomeAverage) } { d.IncomeAverageNote }</span>
-				</div>
-				<div class="text-xs text-base-content/60">{ d.periodNote() }</div>
-			</div>
-			@statTile("Spending", money.FormatDE(d.Spending), d.periodNote())
-			@statTile("Net", money.FormatDE(d.Income+d.Spending), "income minus spending")
+		<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+			@incomeTile("Income", d.Income, d)
+			@incomeTile("Regular income", d.RegularIncome, d)
+			@amountTile("Spending", d.Spending, d.periodNote())
+			@amountTile("Net", d.Income.Cents+d.Spending, d.netNote())
 			<a href="/inbox" class="bg-base-100 rounded-box border border-base-300 p-4 hover:border-primary">
 				<div class="text-sm text-base-content/60">Inbox</div>
 				<div class="text-2xl font-semibold tabular-nums">{ strconv.Itoa(d.Inbox) }</div>
@@ -95,7 +89,7 @@ templ overviewPage(d overviewData) {
 								<tr>
 									<td><a class="link link-hover" href={ templ.SafeURL(categoryURL(c, d.From, d.To)) }>{ categoryLabel(c) }</a></td>
 									<td class="text-right tabular-nums">{ strconv.Itoa(c.Count) }</td>
-									<td class="text-right tabular-nums">{ money.FormatDE(c.Cents) }</td>
+									<td class="text-right tabular-nums">@amount(c.Cents)</td>
 								</tr>
 							}
 						</tbody>
@@ -118,9 +112,9 @@ templ overviewPage(d overviewData) {
 						for _, m := range d.Trend {
 							<tr>
 								<td><a class="link link-hover" href={ templ.SafeURL("/?month=" + m.Month) }>{ monthShort(m.Month) }</a></td>
-								<td class="text-right tabular-nums">{ money.FormatDE(m.IncomeCents) }</td>
-								<td class="text-right tabular-nums">{ money.FormatDE(m.SpendingCents) }</td>
-								<td class="text-right tabular-nums">{ money.FormatDE(m.IncomeCents + m.SpendingCents) }</td>
+								<td class="text-right tabular-nums">@amount(m.IncomeCents)</td>
+								<td class="text-right tabular-nums">@amount(m.SpendingCents)</td>
+								<td class="text-right tabular-nums">@amount(m.IncomeCents + m.SpendingCents)</td>
 							</tr>
 						}
 					</tbody>
@@ -133,6 +127,25 @@ templ overviewPage(d overviewData) {
 	}
 }
 
+// incomeTile shows an income of the overview: the sum of the period, or for
+// a single month the figure of the month before, which is complete; below it
+// a monthly average.
+templ incomeTile(label string, f incomeFigures, d overviewData) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="flex flex-wrap items-baseline gap-x-3">
+			if d.ShowIncomeLast {
+				<span class="text-2xl font-semibold tabular-nums">@amount(f.Last)</span>
+				<span class="text-xs text-base-content/60">{ d.LastMonthNote }</span>
+			} else {
+				<span class="text-2xl font-semibold tabular-nums">@amount(f.Cents)</span>
+				<span class="text-xs text-base-content/60">{ d.periodNote() }</span>
+			}
+		</div>
+		<div class="text-xs text-base-content/60 tabular-nums">⌀ { money.FormatDE(f.Average) } { d.IncomeAverageNote }</div>
+	</div>
+}
+
 templ statTile(label, value, note string) {
 	<div class="bg-base-100 rounded-box border border-base-300 p-4">
 		<div class="text-sm text-base-content/60">{ label }</div>
@@ -140,6 +153,43 @@ templ statTile(label, value, note string) {
 		if note != "" {
 			<div class="text-xs text-base-content/60">{ note }</div>
 		}
+	</div>
+}
+
+// amount renders cents; money coming in is green, as in the transaction list.
+templ amount(cents int64) {
+	<span class={ templ.KV("text-success", cents > 0) }>{ money.FormatDE(cents) }</span>
+}
+
+// amountTile is a statTile for an amount that can be income or spending.
+templ amountTile(label string, cents int64, note string) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="text-2xl font-semibold tabular-nums">
+			@amount(cents)
+		</div>
+		if note != "" {
+			<div class="text-xs text-base-content/60">{ note }</div>
+		}
+	</div>
+}
+
+// costTile is a statTile for a cost: the amount per month, and per year in
+// the line below.
+templ costTile(label string, monthly, yearly int64, note string) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="text-2xl font-semibold tabular-nums">
+			@amount(monthly)
+			<span class="text-sm font-normal text-base-content/60">/ month</span>
+		</div>
+		<div class="text-xs text-base-content/60">
+			@amount(yearly)
+			/ year
+			if note != "" {
+				· { note }
+			}
+		</div>
 	</div>
 }
 
@@ -451,10 +501,10 @@ templ optimizeSection(d optimizeData) {
 			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
 		}
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-			@statTile("Recurring per month", money.FormatDE(d.MonthlyCents), money.FormatDE(d.YearlyCents)+" per year")
-			@statTile("Mandatory", money.FormatDE(d.MandatoryMonthly), plural(d.MandatoryCount, "group", "groups")+", per month")
-			@statTile("Can be saved per year", money.FormatDE(-d.SavingYearly), money.FormatDE(-d.SavingMonthly)+" per month, marked cancel")
-			@statTile("Undecided", strconv.Itoa(d.UndecidedCount), money.FormatDE(d.UndecidedMonthly)+" per month")
+			@costTile("Recurring", d.MonthlyCents, d.YearlyCents, "")
+			@costTile("Mandatory", d.MandatoryMonthly, d.MandatoryYearly, plural(d.MandatoryCount, "group", "groups"))
+			@costTile("Can be saved", -d.SavingMonthly, -d.SavingYearly, "marked cancel")
+			@costTile("Undecided", d.UndecidedMonthly, d.UndecidedYearly, plural(d.UndecidedCount, "group", "groups"))
 		</div>
 		<form id="optimize-filter" action="/optimize" method="get" class="bg-base-100 rounded-box border border-base-300 p-3 mb-3 flex flex-wrap gap-3 items-end">
 			<label class="flex flex-col gap-1 text-xs">
@@ -502,8 +552,8 @@ templ optimizeSection(d optimizeData) {
 						<tbody>
 							<tr class="bg-base-200">
 								<th colspan="2">{ c.Name }</th>
-								<th class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(c.MonthlyCents) }</th>
-								<th class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(c.YearlyCents) }</th>
+								<th class="text-right whitespace-nowrap tabular-nums">@amount(c.MonthlyCents)</th>
+								<th class="text-right whitespace-nowrap tabular-nums">@amount(c.YearlyCents)</th>
 								<th colspan="5"></th>
 							</tr>
 							for _, g := range c.Rows {
@@ -526,10 +576,10 @@ templ optimizeGroup(g optimizeRow, asOf string) {
 			}
 		</td>
 		<td>{ intervalLabel(g.Interval) }</td>
-		<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.MonthlyCents) }</td>
-		<td class="text-right whitespace-nowrap tabular-nums font-medium">{ money.FormatDE(g.YearlyCents) }</td>
+		<td class="text-right whitespace-nowrap tabular-nums">@amount(g.MonthlyCents)</td>
+		<td class="text-right whitespace-nowrap tabular-nums font-medium">@amount(g.YearlyCents)</td>
 		<td class="text-right whitespace-nowrap tabular-nums">{ itoa(g.Share) } %</td>
-		<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.PaidYearCents) }</td>
+		<td class="text-right whitespace-nowrap tabular-nums">@amount(g.PaidYearCents)</td>
 		<td class="whitespace-nowrap">
 			if label, more := g.changeLabel(); label == "" {
 				<span class="text-base-content/50">–</span>
@@ -620,11 +670,11 @@ templ increasesSection(d increasesData) {
 								</td>
 								<td>{ intervalLabel(g.Interval) }</td>
 								<td class="text-right whitespace-nowrap tabular-nums">
-									{ money.FormatDE(g.PrevCents) }
+									@amount(g.PrevCents)
 									<div class="text-xs text-base-content/60">{ dateDE(g.PrevDate) }</div>
 								</td>
 								<td class="text-right whitespace-nowrap tabular-nums">
-									{ money.FormatDE(g.LastCents) }
+									@amount(g.LastCents)
 									<div class="text-xs text-base-content/60">{ dateDE(g.LastDate) }</div>
 								</td>
 								<td class="text-right whitespace-nowrap tabular-nums">
@@ -679,7 +729,7 @@ templ recurringSection(d recurringData) {
 			</label>
 			<button class="btn btn-sm btn-primary">Add</button>
 			<p class="ml-auto text-sm text-base-content/70">
-				Per month in total: <span class="font-semibold tabular-nums text-base-content">{ money.FormatDE(d.MonthlyCents) }</span>
+				Per month in total: <span class="font-semibold tabular-nums text-base-content">@amount(d.MonthlyCents)</span>
 				if d.Unknown > 0 {
 					· without { plural(d.Unknown, "group", "groups") } of unknown interval
 				}
@@ -745,11 +795,11 @@ templ recurringSection(d recurringData) {
 											<span class="badge badge-xs badge-warning badge-soft ml-1" title="No payment for more than two intervals. If it has ended, switch it to inactive.">ended?</span>
 										}
 									</td>
-									<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.LastCents) }</td>
+									<td class="text-right whitespace-nowrap tabular-nums">@amount(g.LastCents)</td>
 								}
 								<td class="text-right whitespace-nowrap tabular-nums font-medium">
 									if cents, ok := g.MonthlyCents(); ok {
-										{ money.FormatDE(cents) }
+										@amount(cents)
 									} else {
 										<span class="text-base-content/50 font-normal">–</span>
 									}
@@ -761,8 +811,9 @@ templ recurringSection(d recurringData) {
 										value="1"
 										class="checkbox checkbox-sm"
 										checked?={ g.CoversReserve }
+										disabled?={ g.Interval == store.IntervalMonthly }
 										aria-label={ "Cover " + g.Name + " by the reserve" }
-										title="Count this group's transactions as irregular expenses for the reserve"
+										title={ reserveTitle(g.Interval) }
 										hx-post={ "/recurring/" + itoa(g.ID) + "/reserve" }
 										hx-target="#recurring"
 										hx-swap="outerHTML"

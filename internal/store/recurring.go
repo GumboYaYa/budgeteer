@@ -198,12 +198,16 @@ func (s *Store) RenameRecurringGroup(ctx context.Context, id int64, name string)
 	return found(res)
 }
 
-// SetRecurringInterval sets the interval of a group; "" means not known.
+// SetRecurringInterval sets the interval of a group; "" means not known. A
+// group that becomes monthly is no longer covered by the reserve.
 func (s *Store) SetRecurringInterval(ctx context.Context, id int64, interval string) error {
 	if interval != "" && IntervalMonths(interval) == 0 {
 		return fmt.Errorf("unknown interval %q", interval)
 	}
-	res, err := s.q.ExecContext(ctx, `UPDATE recurring_groups SET interval = ? WHERE id = ?`, nullable(interval), id)
+	res, err := s.q.ExecContext(ctx, `
+		UPDATE recurring_groups
+		SET interval = ?1, covers_reserve = CASE WHEN ?1 = 'monthly' THEN 0 ELSE covers_reserve END
+		WHERE id = ?2`, nullable(interval), id)
 	if err != nil {
 		return fmt.Errorf("store: set recurring interval: %w", err)
 	}
@@ -211,13 +215,26 @@ func (s *Store) SetRecurringInterval(ctx context.Context, id int64, interval str
 }
 
 // SetRecurringReserve switches whether the group's transactions count as
-// irregular expenses for the reserve.
+// irregular expenses for the reserve. A monthly group cannot be covered: the
+// reserve is for what comes less often.
 func (s *Store) SetRecurringReserve(ctx context.Context, id int64, covers bool) error {
-	res, err := s.q.ExecContext(ctx, `UPDATE recurring_groups SET covers_reserve = ? WHERE id = ?`, covers, id)
-	if err != nil {
-		return fmt.Errorf("store: set recurring reserve: %w", err)
-	}
-	return found(res)
+	return s.atomic(ctx, func(tx *Store) error {
+		var interval string
+		err := tx.q.QueryRowContext(ctx, `SELECT COALESCE(interval, '') FROM recurring_groups WHERE id = ?`, id).Scan(&interval)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: set recurring reserve: %w", err)
+		}
+		if covers && interval == IntervalMonthly {
+			return errors.New("a monthly group cannot be covered by the reserve; that is for expenses that come less often")
+		}
+		if _, err := tx.q.ExecContext(ctx, `UPDATE recurring_groups SET covers_reserve = ? WHERE id = ?`, covers, id); err != nil {
+			return fmt.Errorf("store: set recurring reserve: %w", err)
+		}
+		return nil
+	})
 }
 
 // SetRecurringActive marks a group as running or as ended.

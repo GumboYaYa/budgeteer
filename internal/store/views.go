@@ -235,11 +235,13 @@ func (s *Store) ClearCategory(ctx context.Context, transactionID int64) error {
 }
 
 // MonthTotal is income and spending of one month, transfers excluded.
-// SpendingCents is negative.
+// SpendingCents is negative. RegularIncomeCents is the part of the income
+// that belongs to a recurring group.
 type MonthTotal struct {
-	Month         string // YYYY-MM
-	IncomeCents   int64
-	SpendingCents int64
+	Month              string // YYYY-MM
+	IncomeCents        int64
+	RegularIncomeCents int64
+	SpendingCents      int64
 }
 
 // MonthlyTotals returns one entry per month that has transactions, between
@@ -248,6 +250,7 @@ func (s *Store) MonthlyTotals(ctx context.Context, fromMonth, toMonth string) ([
 	rows, err := s.q.QueryContext(ctx, `
 		SELECT substr(booking_date, 1, 7) AS month,
 		       COALESCE(sum(CASE WHEN amount_cents > 0 THEN amount_cents END), 0),
+		       COALESCE(sum(CASE WHEN amount_cents > 0 AND recurring_group_id IS NOT NULL THEN amount_cents END), 0),
 		       COALESCE(sum(CASE WHEN amount_cents < 0 THEN amount_cents END), 0)
 		FROM transactions
 		WHERE is_transfer = 0 AND substr(booking_date, 1, 7) BETWEEN ? AND ?
@@ -259,7 +262,7 @@ func (s *Store) MonthlyTotals(ctx context.Context, fromMonth, toMonth string) ([
 	var totals []MonthTotal
 	for rows.Next() {
 		var m MonthTotal
-		if err := rows.Scan(&m.Month, &m.IncomeCents, &m.SpendingCents); err != nil {
+		if err := rows.Scan(&m.Month, &m.IncomeCents, &m.RegularIncomeCents, &m.SpendingCents); err != nil {
 			return nil, fmt.Errorf("store: monthly totals: %w", err)
 		}
 		totals = append(totals, m)

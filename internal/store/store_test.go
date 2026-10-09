@@ -256,6 +256,44 @@ func TestRecurringGroups(t *testing.T) {
 	if err := s.SetRecurringReserve(ctx, a, true); err != nil {
 		t.Fatal(err)
 	}
+	// Only a group that is not monthly can be covered by the reserve, and
+	// becoming monthly ends it.
+	covered := func(id int64) bool {
+		t.Helper()
+		var covers bool
+		if err := s.DB.QueryRow(`SELECT covers_reserve FROM recurring_groups WHERE id = ?`, id).Scan(&covers); err != nil {
+			t.Fatal(err)
+		}
+		return covers
+	}
+	monthly, err := s.EnsureRecurringGroup(ctx, "Monatlich")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecurringReserve(ctx, monthly, true); err != nil || !covered(monthly) {
+		t.Errorf("a group of unknown interval was not covered: %v", err)
+	}
+	if err := s.SetRecurringInterval(ctx, monthly, IntervalMonthly); err != nil || covered(monthly) {
+		t.Errorf("a group that became monthly is still covered (error %v)", err)
+	}
+	if err := s.SetRecurringReserve(ctx, monthly, true); err == nil || covered(monthly) {
+		t.Error("a monthly group was covered by the reserve")
+	}
+	if err := s.SetRecurringReserve(ctx, monthly, false); err != nil {
+		t.Errorf("switching the reserve off for a monthly group: %v", err)
+	}
+	if err := s.SetRecurringInterval(ctx, a, IntervalHalfYearly); err != nil || !covered(a) {
+		t.Errorf("another interval than monthly ended the reserve (error %v)", err)
+	}
+	if err := s.SetRecurringReserve(ctx, 999, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetRecurringReserve(unknown) error = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteRecurringGroup(ctx, monthly); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecurringInterval(ctx, a, IntervalYearly); err != nil {
+		t.Fatal(err)
+	}
 	groups, err := s.ListRecurringGroups(ctx)
 	if err != nil {
 		t.Fatal(err)

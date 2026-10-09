@@ -91,12 +91,14 @@ type optimizeData struct {
 	// Mandatory groups cannot be cancelled.
 	MandatoryCount   int
 	MandatoryMonthly int64
+	MandatoryYearly  int64
 	// Saving sums the groups marked "cancel".
 	SavingMonthly int64
 	SavingYearly  int64
 	// Undecided groups are neither mandatory nor have a verdict.
 	UndecidedCount   int
 	UndecidedMonthly int64
+	UndecidedYearly  int64
 	// Unknown counts the active expense groups left out because their
 	// interval is not known, Hidden the mandatory ones filtered out.
 	Unknown int
@@ -233,6 +235,15 @@ func (r optimizeRow) changeLabel() (label string, more bool) {
 	}
 }
 
+// reserveTitle explains the Reserve checkbox of a group with the given
+// interval.
+func reserveTitle(interval string) string {
+	if interval == store.IntervalMonthly {
+		return "A monthly group cannot be covered by the reserve; that is for expenses that come less often"
+	}
+	return "Count this group's transactions as irregular expenses for the reserve"
+}
+
 // cancelTitle explains the Cancel button of a group.
 func cancelTitle(mandatory bool) string {
 	if mandatory {
@@ -274,11 +285,17 @@ type overviewData struct {
 	Prev, Next         string // URLs of the periods of the same length before and after
 	Presets            []rangePreset
 	From, To           string // first and last day
-	Income             int64
-	Spending           int64 // negative
-	// IncomeAverage is a monthly average shown next to the income;
-	// IncomeAverageNote says over which months.
-	IncomeAverage     int64
+	// Income is all income of the period, RegularIncome the part that
+	// belongs to a recurring group.
+	Income        incomeFigures
+	RegularIncome incomeFigures
+	Spending      int64 // negative
+	// ShowIncomeLast is set for a period of one month: the income boxes
+	// then show the month before, named by LastMonthNote, because the month
+	// shown may still be running. IncomeAverageNote says over which months
+	// the averages are taken.
+	ShowIncomeLast    bool
+	LastMonthNote     string
 	IncomeAverageNote string
 	Inbox             int
 	// Account balances at the end of BalanceDate.
@@ -288,6 +305,14 @@ type overviewData struct {
 	Categories   []store.CategoryTotal
 	Trend        []store.MonthTotal
 	Chart        chartData
+}
+
+// incomeFigures are the sum of the period, the figure of the month before it
+// and a monthly average.
+type incomeFigures struct {
+	Cents   int64
+	Last    int64
+	Average int64
 }
 
 // rangePreset is a shortcut to a period of the overview.
@@ -303,6 +328,15 @@ func (d overviewData) periodNote() string {
 		return "this month"
 	}
 	return "in these " + strconv.Itoa(d.Months) + " months"
+}
+
+// netNote is the line below the net figure. For a single month it says that
+// the figure is that month's, unlike the income shown beside it.
+func (d overviewData) netNote() string {
+	if d.ShowIncomeLast {
+		return "income minus spending, this month"
+	}
+	return "income minus spending"
 }
 
 // monthsBetween counts the months from one month to another, both included.

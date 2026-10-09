@@ -322,7 +322,8 @@ templ listResults(d listData) {
 templ listSummary(d listData, margin string) {
 	<div class={ "flex items-center justify-between text-sm text-base-content/70", margin }>
 		<p>
-			{ plural(d.Page.Total, "transaction", "transactions") } · { money.FormatDE(d.Page.SumCents) }
+			{ plural(d.Page.Total, "transaction", "transactions") } ·
+			@amount(d.Page.SumCents)
 		</p>
 		if d.Pages > 1 {
 			<div class="join">

@@ -120,21 +120,30 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		d.Trend = append(d.Trend, m)
 	}
 	for _, m := range d.Trend[len(d.Trend)-months:] {
-		d.Income += m.IncomeCents
+		d.Income.Cents += m.IncomeCents
+		d.RegularIncome.Cents += m.RegularIncomeCents
 		d.Spending += m.SpendingCents
 	}
-	// Next to the income: for one month the average of the six months before
-	// it, for a longer period its own monthly average.
+	// The income and the regular income: for one month the figure of the
+	// month before, which is complete, and below it the average of that
+	// month and the five before it; for a longer period its sum and its own
+	// monthly average.
 	if months == 1 {
-		var sum int64
 		before := d.Trend[:len(d.Trend)-1]
 		for _, m := range before[len(before)-incomeAverageMonths:] {
-			sum += m.IncomeCents
+			d.Income.Average += m.IncomeCents
+			d.RegularIncome.Average += m.RegularIncomeCents
 		}
-		d.IncomeAverage = roundDiv(sum, incomeAverageMonths)
-		d.IncomeAverageNote = "over the " + strconv.Itoa(incomeAverageMonths) + " months before"
+		d.ShowIncomeLast = true
+		d.LastMonthNote = "last month, " + from.AddDate(0, -1, 0).Format("January 2006")
+		d.Income.Last = before[len(before)-1].IncomeCents
+		d.RegularIncome.Last = before[len(before)-1].RegularIncomeCents
+		d.Income.Average = roundDiv(d.Income.Average, incomeAverageMonths)
+		d.RegularIncome.Average = roundDiv(d.RegularIncome.Average, incomeAverageMonths)
+		d.IncomeAverageNote = "last month and the " + strconv.Itoa(incomeAverageMonths-1) + " before"
 	} else {
-		d.IncomeAverage = roundDiv(d.Income, int64(months))
+		d.Income.Average = roundDiv(d.Income.Cents, int64(months))
+		d.RegularIncome.Average = roundDiv(d.RegularIncome.Cents, int64(months))
 		d.IncomeAverageNote = "per month"
 	}
 	d.Chart = buildCharts(d)
@@ -655,12 +664,14 @@ func (s *server) optimizeData(r *http.Request, problem string) (optimizeData, er
 		case c.Mandatory:
 			d.MandatoryCount++
 			d.MandatoryMonthly += monthly
+			d.MandatoryYearly += yearly
 		case c.Verdict == store.VerdictCancel:
 			d.SavingMonthly += monthly
 			d.SavingYearly += yearly
 		case c.Verdict == "":
 			d.UndecidedCount++
 			d.UndecidedMonthly += monthly
+			d.UndecidedYearly += yearly
 		}
 		if c.Mandatory && d.Mandatory == mandatoryHide {
 			d.Hidden++
@@ -676,7 +687,7 @@ func (s *server) optimizeData(r *http.Request, problem string) (optimizeData, er
 }
 
 // increasesData collects the running expenses that got more expensive,
-// mandatory ones included, the rise that costs most per year first.
+// mandatory ones included, the highest rise in percent first.
 func (s *server) increasesData(r *http.Request, problem string) (increasesData, error) {
 	ctx := r.Context()
 	d := increasesData{Error: problem}
@@ -713,7 +724,7 @@ func (s *server) increasesData(r *http.Request, problem string) (increasesData, 
 		d.Rows = append(d.Rows, row)
 	}
 	slices.SortStableFunc(d.Rows, func(a, b increaseRow) int {
-		return cmp.Or(cmp.Compare(b.ExtraYearly, a.ExtraYearly), cmp.Compare(a.Name, b.Name))
+		return cmp.Or(cmp.Compare(b.Percent, a.Percent), cmp.Compare(b.ExtraYearly, a.ExtraYearly), cmp.Compare(a.Name, b.Name))
 	})
 	return d, nil
 }
