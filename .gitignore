@@ -15,6 +15,9 @@
 /bin/
 /dist/
 
+# Backup
+/backup/
+
 # Go
 *.test
 *.out

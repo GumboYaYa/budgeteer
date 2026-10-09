@@ -36,6 +36,13 @@ func IntervalMonths(interval string) int {
 	return 0
 }
 
+// Verdicts of the review of a recurring group. The empty string means
+// "undecided".
+const (
+	VerdictKeep   = "keep"
+	VerdictCancel = "cancel"
+)
+
 // RecurringGroup is a named series of recurring transactions.
 type RecurringGroup struct {
 	ID       int64
@@ -48,6 +55,12 @@ type RecurringGroup struct {
 	// its transactions but no longer counts for the monthly cost or the
 	// reserve.
 	Active bool
+	// Mandatory marks a group that cannot be cancelled, such as a loan. It
+	// is left out when costs are reviewed.
+	Mandatory bool
+	// Verdict is what the review decided: VerdictKeep, VerdictCancel or ""
+	// while undecided.
+	Verdict string
 
 	// Filled by ListRecurringGroups: number of transactions, and date and
 	// amount of the newest one.
@@ -85,11 +98,21 @@ func (g RecurringGroup) MonthlyCents() (cents int64, ok bool) {
 	return (g.LastCents + months/2) / months, true
 }
 
+// YearlyCents is what the group costs per year, judged by its newest
+// transaction; ok is as for MonthlyCents.
+func (g RecurringGroup) YearlyCents() (cents int64, ok bool) {
+	months := int64(IntervalMonths(g.Interval))
+	if !g.Active || months == 0 || g.Count == 0 {
+		return 0, false
+	}
+	return g.LastCents * (12 / months), true
+}
+
 // ListRecurringGroups returns all groups, the active ones first, each part
 // ordered by name.
 func (s *Store) ListRecurringGroups(ctx context.Context) ([]RecurringGroup, error) {
 	rows, err := s.q.QueryContext(ctx, `
-		SELECT g.id, g.name, COALESCE(g.interval, ''), g.covers_reserve, g.active,
+		SELECT g.id, g.name, COALESCE(g.interval, ''), g.covers_reserve, g.active, g.mandatory, COALESCE(g.verdict, ''),
 		       (SELECT count(*) FROM transactions t WHERE t.recurring_group_id = g.id),
 		       COALESCE((SELECT t.booking_date FROM transactions t WHERE t.recurring_group_id = g.id
 		                 ORDER BY t.booking_date DESC, t.id DESC LIMIT 1), ''),
@@ -104,7 +127,7 @@ func (s *Store) ListRecurringGroups(ctx context.Context) ([]RecurringGroup, erro
 	var groups []RecurringGroup
 	for rows.Next() {
 		var g RecurringGroup
-		if err := rows.Scan(&g.ID, &g.Name, &g.Interval, &g.CoversReserve, &g.Active, &g.Count, &g.LastDate, &g.LastCents); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Interval, &g.CoversReserve, &g.Active, &g.Mandatory, &g.Verdict, &g.Count, &g.LastDate, &g.LastCents); err != nil {
 			return nil, fmt.Errorf("store: list recurring groups: %w", err)
 		}
 		groups = append(groups, g)
@@ -175,12 +198,16 @@ func (s *Store) RenameRecurringGroup(ctx context.Context, id int64, name string)
 	return found(res)
 }
 
-// SetRecurringInterval sets the interval of a group; "" means not known.
+// SetRecurringInterval sets the interval of a group; "" means not known. A
+// group that becomes monthly is no longer covered by the reserve.
 func (s *Store) SetRecurringInterval(ctx context.Context, id int64, interval string) error {
 	if interval != "" && IntervalMonths(interval) == 0 {
 		return fmt.Errorf("unknown interval %q", interval)
 	}
-	res, err := s.q.ExecContext(ctx, `UPDATE recurring_groups SET interval = ? WHERE id = ?`, nullable(interval), id)
+	res, err := s.q.ExecContext(ctx, `
+		UPDATE recurring_groups
+		SET interval = ?1, covers_reserve = CASE WHEN ?1 = 'monthly' THEN 0 ELSE covers_reserve END
+		WHERE id = ?2`, nullable(interval), id)
 	if err != nil {
 		return fmt.Errorf("store: set recurring interval: %w", err)
 	}
@@ -188,13 +215,26 @@ func (s *Store) SetRecurringInterval(ctx context.Context, id int64, interval str
 }
 
 // SetRecurringReserve switches whether the group's transactions count as
-// irregular expenses for the reserve.
+// irregular expenses for the reserve. A monthly group cannot be covered: the
+// reserve is for what comes less often.
 func (s *Store) SetRecurringReserve(ctx context.Context, id int64, covers bool) error {
-	res, err := s.q.ExecContext(ctx, `UPDATE recurring_groups SET covers_reserve = ? WHERE id = ?`, covers, id)
-	if err != nil {
-		return fmt.Errorf("store: set recurring reserve: %w", err)
-	}
-	return found(res)
+	return s.atomic(ctx, func(tx *Store) error {
+		var interval string
+		err := tx.q.QueryRowContext(ctx, `SELECT COALESCE(interval, '') FROM recurring_groups WHERE id = ?`, id).Scan(&interval)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: set recurring reserve: %w", err)
+		}
+		if covers && interval == IntervalMonthly {
+			return errors.New("a monthly group cannot be covered by the reserve; that is for expenses that come less often")
+		}
+		if _, err := tx.q.ExecContext(ctx, `UPDATE recurring_groups SET covers_reserve = ? WHERE id = ?`, covers, id); err != nil {
+			return fmt.Errorf("store: set recurring reserve: %w", err)
+		}
+		return nil
+	})
 }
 
 // SetRecurringActive marks a group as running or as ended.
@@ -204,6 +244,156 @@ func (s *Store) SetRecurringActive(ctx context.Context, id int64, active bool) e
 		return fmt.Errorf("store: set recurring active: %w", err)
 	}
 	return found(res)
+}
+
+// SetRecurringMandatory marks a group as one that cannot be cancelled. A
+// "cancel" verdict does not survive that.
+func (s *Store) SetRecurringMandatory(ctx context.Context, id int64, mandatory bool) error {
+	res, err := s.q.ExecContext(ctx, `
+		UPDATE recurring_groups
+		SET mandatory = ?1, verdict = CASE WHEN ?1 AND verdict = 'cancel' THEN NULL ELSE verdict END
+		WHERE id = ?2`, mandatory, id)
+	if err != nil {
+		return fmt.Errorf("store: set recurring mandatory: %w", err)
+	}
+	return found(res)
+}
+
+// SetRecurringVerdict records what the review decided for a group; "" means
+// undecided. A mandatory group cannot be marked for cancelling.
+func (s *Store) SetRecurringVerdict(ctx context.Context, id int64, verdict string) error {
+	if verdict != "" && verdict != VerdictKeep && verdict != VerdictCancel {
+		return fmt.Errorf("unknown verdict %q", verdict)
+	}
+	return s.atomic(ctx, func(tx *Store) error {
+		var mandatory bool
+		err := tx.q.QueryRowContext(ctx, `SELECT mandatory FROM recurring_groups WHERE id = ?`, id).Scan(&mandatory)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("store: set recurring verdict: %w", err)
+		}
+		if mandatory && verdict == VerdictCancel {
+			return errors.New("a mandatory group cannot be cancelled; switch off mandatory first")
+		}
+		if _, err := tx.q.ExecContext(ctx, `UPDATE recurring_groups SET verdict = ? WHERE id = ?`, nullable(verdict), id); err != nil {
+			return fmt.Errorf("store: set recurring verdict: %w", err)
+		}
+		return nil
+	})
+}
+
+// RecurringCost is a group with the figures for reviewing what it costs.
+type RecurringCost struct {
+	RecurringGroup
+	// PaidYearCents sums the group's transactions of the twelve months up
+	// to the date asked for.
+	PaidYearCents int64
+	// PrevDate and PrevCents are the payment the newest one is compared
+	// with: the newest that is at least eleven months older, or else the
+	// group's first. PrevDate is "" for a group with fewer than two
+	// transactions.
+	PrevDate  string
+	PrevCents int64
+	// CategoryID and CategoryName are the main category most of the group's
+	// transactions are booked to; 0 and "" if most are uncategorized.
+	CategoryID   int64
+	CategoryName string
+}
+
+// ChangeCents is the newest amount minus the one it is compared with; ok is
+// false if there is no earlier payment.
+func (c RecurringCost) ChangeCents() (cents int64, ok bool) {
+	if c.PrevDate == "" {
+		return 0, false
+	}
+	return c.LastCents - c.PrevCents, true
+}
+
+// YearlyChangeCents is ChangeCents for a whole year of payments; ok is false
+// as well if the group is inactive or its interval is not known.
+func (c RecurringCost) YearlyChangeCents() (cents int64, ok bool) {
+	months := int64(IntervalMonths(c.Interval))
+	change, ok := c.ChangeCents()
+	if !c.Active || months == 0 || !ok {
+		return 0, false
+	}
+	return change * (12 / months), true
+}
+
+// ListRecurringCosts returns all groups as ListRecurringGroups does, with
+// their cost figures as of asOf (YYYY-MM-DD).
+func (s *Store) ListRecurringCosts(ctx context.Context, asOf string) ([]RecurringCost, error) {
+	groups, err := s.ListRecurringGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	costs := make([]RecurringCost, len(groups))
+	byID := make(map[int64]*RecurringCost, len(groups))
+	for i, g := range groups {
+		costs[i].RecurringGroup = g
+		byID[g.ID] = &costs[i]
+	}
+	yearBefore := ""
+	if day, err := time.Parse(time.DateOnly, asOf); err == nil {
+		yearBefore = day.AddDate(-1, 0, 0).Format(time.DateOnly)
+	}
+
+	// Newest first within a group, in the order ListRecurringGroups takes
+	// the newest transaction.
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT t.recurring_group_id, t.booking_date, t.amount_cents, COALESCE(p.id, c.id, 0), COALESCE(p.name, c.name, '')
+		FROM transactions t
+		LEFT JOIN allocations al ON al.transaction_id = t.id AND al.source <> 'suggested'
+		LEFT JOIN categories c ON c.id = al.category_id
+		LEFT JOIN categories p ON p.id = c.parent_id
+		WHERE t.recurring_group_id IS NOT NULL
+		ORDER BY t.recurring_group_id, t.booking_date DESC, t.id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list recurring costs: %w", err)
+	}
+	defer rows.Close()
+	var (
+		current  *RecurringCost
+		seen     int
+		before   string        // a payment up to this date is old enough to compare with
+		compared bool          // such a payment was found
+		uses     map[int64]int // transactions per main category
+	)
+	for rows.Next() {
+		var (
+			groupID, cents, categoryID int64
+			date, categoryName         string
+		)
+		if err := rows.Scan(&groupID, &date, &cents, &categoryID, &categoryName); err != nil {
+			return nil, fmt.Errorf("store: list recurring costs: %w", err)
+		}
+		if current == nil || current.ID != groupID {
+			current, seen, compared, uses = byID[groupID], 0, false, map[int64]int{}
+			before = ""
+			if day, err := time.Parse(time.DateOnly, date); err == nil {
+				before = day.AddDate(0, -11, 0).Format(time.DateOnly)
+			}
+		}
+		if current == nil {
+			continue
+		}
+		seen++
+		if date > yearBefore && date <= asOf {
+			current.PaidYearCents += cents
+		}
+		if seen > 1 && !compared {
+			current.PrevDate, current.PrevCents = date, cents
+			compared = date <= before
+		}
+		// The newest transaction decides between categories used equally often.
+		uses[categoryID]++
+		if seen == 1 || uses[categoryID] > uses[current.CategoryID] {
+			current.CategoryID, current.CategoryName = categoryID, categoryName
+		}
+	}
+	return costs, rows.Err()
 }
 
 // MergeRecurringGroup moves the transactions and source contracts of one

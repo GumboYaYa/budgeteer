@@ -142,6 +142,7 @@ func TestCSV(t *testing.T) {
 		{"fg-0008", "recurring_group", "Hausverwaltung Beispiel"},
 		{"fg-0008", "recurring_interval", "monthly"},
 		{"fg-0008", "recurring_active", "1"},
+		{"fg-0008", "recurring_mandatory", "0"},
 		{"fg-0005", "counterparty", "Rundfunk ARD, ZDF, DRadio"},
 		{"fg-0006", "tags", "geschenk;urlaub-2026"},
 		{"fg-0006", "purpose", "say \"hi\", twice\nsecond line"},

@@ -29,17 +29,11 @@ templ overviewPage(d overviewData) {
 				</form>
 			</div>
 		</div>
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-			<div class="bg-base-100 rounded-box border border-base-300 p-4">
-				<div class="text-sm text-base-content/60">Income</div>
-				<div class="flex flex-wrap items-baseline gap-x-3">
-					<span class="text-2xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{ money.FormatDE(d.Income) }</span>
-					<span class="text-xs text-base-content/60 tabular-nums">⌀ { money.FormatDE(d.IncomeAverage) } { d.IncomeAverageNote }</span>
-				</div>
-				<div class="text-xs text-base-content/60">{ d.periodNote() }</div>
-			</div>
-			@statTile("Spending", money.FormatDE(d.Spending), d.periodNote())
-			@statTile("Net", money.FormatDE(d.Income+d.Spending), "income minus spending")
+		<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+			@incomeTile("Total Income", d.Income, d)
+			@incomeTile("Regular income", d.RegularIncome, d)
+			@amountTile("Spending", d.Spending, d.periodNote())
+			@amountTile("Net", d.Income.Cents+d.Spending, d.netNote())
 			<a href="/inbox" class="bg-base-100 rounded-box border border-base-300 p-4 hover:border-primary">
 				<div class="text-sm text-base-content/60">Inbox</div>
 				<div class="text-2xl font-semibold tabular-nums">{ strconv.Itoa(d.Inbox) }</div>
@@ -95,7 +89,7 @@ templ overviewPage(d overviewData) {
 								<tr>
 									<td><a class="link link-hover" href={ templ.SafeURL(categoryURL(c, d.From, d.To)) }>{ categoryLabel(c) }</a></td>
 									<td class="text-right tabular-nums">{ strconv.Itoa(c.Count) }</td>
-									<td class="text-right tabular-nums">{ money.FormatDE(c.Cents) }</td>
+									<td class="text-right tabular-nums">@amount(c.Cents)</td>
 								</tr>
 							}
 						</tbody>
@@ -118,9 +112,9 @@ templ overviewPage(d overviewData) {
 						for _, m := range d.Trend {
 							<tr>
 								<td><a class="link link-hover" href={ templ.SafeURL("/?month=" + m.Month) }>{ monthShort(m.Month) }</a></td>
-								<td class="text-right tabular-nums">{ money.FormatDE(m.IncomeCents) }</td>
-								<td class="text-right tabular-nums">{ money.FormatDE(m.SpendingCents) }</td>
-								<td class="text-right tabular-nums">{ money.FormatDE(m.IncomeCents + m.SpendingCents) }</td>
+								<td class="text-right tabular-nums">@amount(m.IncomeCents)</td>
+								<td class="text-right tabular-nums">@amount(m.SpendingCents)</td>
+								<td class="text-right tabular-nums">@amount(m.IncomeCents + m.SpendingCents)</td>
 							</tr>
 						}
 					</tbody>
@@ -133,6 +127,25 @@ templ overviewPage(d overviewData) {
 	}
 }
 
+// incomeTile shows an income of the overview: the sum of the period, or for
+// a single month the figure of the month before, which is complete; below it
+// a monthly average.
+templ incomeTile(label string, f incomeFigures, d overviewData) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="flex flex-wrap items-baseline gap-x-3">
+			if d.ShowIncomeLast {
+				<span class="text-2xl font-semibold tabular-nums">@amount(f.Last)</span>
+				<span class="text-xs text-base-content/60">{ d.LastMonthNote }</span>
+			} else {
+				<span class="text-2xl font-semibold tabular-nums">@amount(f.Cents)</span>
+				<span class="text-xs text-base-content/60">{ d.periodNote() }</span>
+			}
+		</div>
+		<div class="text-xs text-base-content/60 tabular-nums">⌀ { money.FormatDE(f.Average) } { d.IncomeAverageNote }</div>
+	</div>
+}
+
 templ statTile(label, value, note string) {
 	<div class="bg-base-100 rounded-box border border-base-300 p-4">
 		<div class="text-sm text-base-content/60">{ label }</div>
@@ -140,6 +153,43 @@ templ statTile(label, value, note string) {
 		if note != "" {
 			<div class="text-xs text-base-content/60">{ note }</div>
 		}
+	</div>
+}
+
+// amount renders cents; money coming in is green, as in the transaction list.
+templ amount(cents int64) {
+	<span class={ templ.KV("text-success", cents > 0) }>{ money.FormatDE(cents) }</span>
+}
+
+// amountTile is a statTile for an amount that can be income or spending.
+templ amountTile(label string, cents int64, note string) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="text-2xl font-semibold tabular-nums">
+			@amount(cents)
+		</div>
+		if note != "" {
+			<div class="text-xs text-base-content/60">{ note }</div>
+		}
+	</div>
+}
+
+// costTile is a statTile for a cost: the amount per month, and per year in
+// the line below.
+templ costTile(label string, monthly, yearly int64, note string) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">{ label }</div>
+		<div class="text-2xl font-semibold tabular-nums">
+			@amount(monthly)
+			<span class="text-sm font-normal text-base-content/60">/ month</span>
+		</div>
+		<div class="text-xs text-base-content/60">
+			@amount(yearly)
+			/ year
+			if note != "" {
+				· { note }
+			}
+		</div>
 	</div>
 }
 
@@ -422,6 +472,230 @@ templ reservePage(d reserveData) {
 	}
 }
 
+templ optimizePage(d optimizePageData) {
+	@layout("Optimize", "optimize", d.Inbox) {
+		<h1 class="text-2xl font-semibold mb-2">Optimize</h1>
+		<div role="tablist" class="tabs tabs-border mb-3">
+			<a role="tab" href="/optimize" class={ "tab", templ.KV("tab-active", d.Tab == tabCosts) } aria-selected?={ d.Tab == tabCosts }>Costs</a>
+			<a role="tab" href={ templ.SafeURL("/optimize?tab=" + tabIncreases) } class={ "tab", templ.KV("tab-active", d.Tab == tabIncreases) } aria-selected?={ d.Tab == tabIncreases }>Price increases</a>
+		</div>
+		if d.Tab == tabIncreases {
+			@increasesSection(d.Increases)
+		} else {
+			@optimizeSection(d.Costs)
+		}
+	}
+}
+
+templ optimizeSection(d optimizeData) {
+	<div id="optimize">
+		<p class="text-sm text-base-content/70 mb-4">
+			What the running <a class="link" href="/recurring">recurring groups</a> cost, to decide which are still needed.
+			Mark what cannot be cancelled as mandatory, and the rest as keep or cancel.
+			Once something is really cancelled, switch its group to inactive on the Recurring page.
+			if d.AsOf != "" {
+				Calculated as of { dateDE(d.AsOf) }, the newest imported transaction.
+			}
+		</p>
+		if d.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
+		}
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+			@costTile("Recurring", d.MonthlyCents, d.YearlyCents, "")
+			@costTile("Mandatory", d.MandatoryMonthly, d.MandatoryYearly, plural(d.MandatoryCount, "group", "groups"))
+			@costTile("Can be saved", -d.SavingMonthly, -d.SavingYearly, "marked cancel")
+			@costTile("Undecided", d.UndecidedMonthly, d.UndecidedYearly, plural(d.UndecidedCount, "group", "groups"))
+		</div>
+		<form id="optimize-filter" action="/optimize" method="get" class="bg-base-100 rounded-box border border-base-300 p-3 mb-3 flex flex-wrap gap-3 items-end">
+			<label class="flex flex-col gap-1 text-xs">
+				Mandatory
+				<select name="mandatory" class="select select-sm" onchange="this.form.submit()">
+					<option value={ mandatoryHide } selected?={ d.Mandatory == mandatoryHide }>Hide</option>
+					<option value={ mandatoryShow } selected?={ d.Mandatory == mandatoryShow }>Show</option>
+				</select>
+			</label>
+			<label class="flex flex-col gap-1 text-xs">
+				Review
+				<select name="review" class="select select-sm" onchange="this.form.submit()">
+					for _, f := range reviewFilters {
+						<option value={ f } selected?={ f == d.Review }>{ reviewLabel(f) }</option>
+					}
+				</select>
+			</label>
+			<noscript><button class="btn btn-sm">Filter</button></noscript>
+			<p class="ml-auto text-sm text-base-content/70">
+				if d.Hidden > 0 {
+					{ strconv.Itoa(d.Hidden) } mandatory hidden
+				}
+				if d.Hidden > 0 && d.Unknown > 0 {
+					·
+				}
+				if d.Unknown > 0 {
+					{ plural(d.Unknown, "group", "groups") } of unknown interval left out, <a class="link" href="/recurring">set it</a>
+				}
+			</p>
+		</form>
+		if len(d.Categories) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+				No recurring expenses to show. Groups are managed on the <a class="link" href="/recurring">Recurring page</a>; an expense counts here once its group is active and has an interval.
+			</div>
+		} else {
+			<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Name</th><th>Interval</th><th class="text-right">Per month</th><th class="text-right">Per year</th>
+							<th class="text-right">Share</th><th class="text-right">Paid in 12 months</th><th>Price change</th><th>Mandatory</th><th>Review</th>
+						</tr>
+					</thead>
+					for _, c := range d.Categories {
+						<tbody>
+							<tr class="bg-base-200">
+								<th colspan="2">{ c.Name }</th>
+								<th class="text-right whitespace-nowrap tabular-nums">@amount(c.MonthlyCents)</th>
+								<th class="text-right whitespace-nowrap tabular-nums">@amount(c.YearlyCents)</th>
+								<th colspan="5"></th>
+							</tr>
+							for _, g := range c.Rows {
+								@optimizeGroup(g, d.AsOf)
+							}
+						</tbody>
+					}
+				</table>
+			</div>
+		}
+	</div>
+}
+
+templ optimizeGroup(g optimizeRow, asOf string) {
+	<tr>
+		<td class="font-medium">
+			<a class="link link-hover" href={ templ.SafeURL("/transactions?recurring=" + itoa(g.ID)) } title={ plural(g.Count, "transaction", "transactions") + ", last on " + dateDE(g.LastDate) }>{ g.Name }</a>
+			if g.Lapsed(asOf) {
+				<span class="badge badge-xs badge-warning badge-soft ml-1" title="No payment for more than two intervals. If it has ended, switch it to inactive on the Recurring page.">ended?</span>
+			}
+		</td>
+		<td>{ intervalLabel(g.Interval) }</td>
+		<td class="text-right whitespace-nowrap tabular-nums">@amount(g.MonthlyCents)</td>
+		<td class="text-right whitespace-nowrap tabular-nums font-medium">@amount(g.YearlyCents)</td>
+		<td class="text-right whitespace-nowrap tabular-nums">{ itoa(g.Share) } %</td>
+		<td class="text-right whitespace-nowrap tabular-nums">@amount(g.PaidYearCents)</td>
+		<td class="whitespace-nowrap">
+			if label, more := g.changeLabel(); label == "" {
+				<span class="text-base-content/50">–</span>
+			} else if more {
+				<span class="badge badge-sm badge-warning badge-soft">{ label }</span>
+			} else {
+				<span class="text-base-content/70">{ label }</span>
+			}
+		</td>
+		<td>
+			<input
+				type="checkbox"
+				name="value"
+				value="1"
+				class="checkbox checkbox-sm"
+				checked?={ g.Mandatory }
+				aria-label={ g.Name + " is mandatory" }
+				title="Cannot be cancelled, such as a loan"
+				hx-post={ "/recurring/" + itoa(g.ID) + "/mandatory" }
+				hx-vals='{"view": "optimize"}'
+				hx-include="#optimize-filter"
+				hx-target="#optimize"
+				hx-swap="outerHTML"
+			/>
+		</td>
+		<td>
+@verdictButtons(g.RecurringGroup, tabCosts)
+		</td>
+	</tr>
+}
+
+// verdictButtons set the verdict of a group from a tab of the Optimize page.
+templ verdictButtons(g store.RecurringGroup, tab string) {
+	<form class="join" hx-post={ "/recurring/" + itoa(g.ID) + "/verdict" } hx-include="#optimize-filter" hx-target={ tabTarget(tab) } hx-swap="outerHTML">
+		<input type="hidden" name="view" value="optimize"/>
+		<input type="hidden" name="tab" value={ tab }/>
+		<button name="verdict" value={ store.VerdictKeep } class={ "join-item btn btn-xs", templ.KV("btn-success", g.Verdict == store.VerdictKeep) } aria-pressed?={ g.Verdict == store.VerdictKeep }>Keep</button>
+		<button name="verdict" value={ store.VerdictCancel } class={ "join-item btn btn-xs", templ.KV("btn-error", g.Verdict == store.VerdictCancel) } aria-pressed?={ g.Verdict == store.VerdictCancel } disabled?={ g.Mandatory } title={ cancelTitle(g.Mandatory) }>Cancel</button>
+		<button name="verdict" value="" class="join-item btn btn-xs" disabled?={ g.Verdict == "" } aria-label={ "Clear the verdict for " + g.Name } title="Undecided">–</button>
+	</form>
+}
+
+templ increasesSection(d increasesData) {
+	<div id="increases">
+		<p class="text-sm text-base-content/70 mb-4">
+			Running <a class="link" href="/recurring">recurring groups</a> that got more expensive: the newest payment against the one about a year earlier, or against the first one of a younger group.
+			Mandatory groups are listed too, since a loan, an insurance or a bank account can be moved to a better offer.
+			if d.AsOf != "" {
+				Calculated as of { dateDE(d.AsOf) }, the newest imported transaction.
+			}
+		</p>
+		if d.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3"><span>{ d.Error }</span></div>
+		}
+		<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+			@statTile("More per year", money.FormatDE(d.ExtraYearly), plural(len(d.Rows), "group", "groups")+" got more expensive")
+			@statTile("Of that mandatory", money.FormatDE(d.MandatoryExtra), plural(d.MandatoryCount, "group", "groups"))
+			@statTile("Compared", strconv.Itoa(d.Compared), "running expenses with an earlier payment")
+		</div>
+		if len(d.Rows) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-10 text-center text-base-content/60">
+				Nothing got more expensive. A group is compared once it has two payments, is active and has an interval.
+			</div>
+		} else {
+			<div class="overflow-x-auto bg-base-100 rounded-box border border-base-300">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Name</th><th>Category</th><th>Interval</th><th class="text-right">Before</th><th class="text-right">Now</th>
+							<th class="text-right">Increase</th><th class="text-right">More per year</th><th>Review</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, g := range d.Rows {
+							<tr>
+								<td class="font-medium">
+									<a class="link link-hover" href={ templ.SafeURL("/transactions?recurring=" + itoa(g.ID)) } title={ plural(g.Count, "transaction", "transactions") }>{ g.Name }</a>
+									if g.Mandatory {
+										<span class="badge badge-xs badge-ghost ml-1">mandatory</span>
+									}
+								</td>
+								<td>
+									if g.CategoryID == 0 {
+										<span class="text-base-content/50">Uncategorized</span>
+									} else {
+										{ g.CategoryName }
+									}
+								</td>
+								<td>{ intervalLabel(g.Interval) }</td>
+								<td class="text-right whitespace-nowrap tabular-nums">
+									@amount(g.PrevCents)
+									<div class="text-xs text-base-content/60">{ dateDE(g.PrevDate) }</div>
+								</td>
+								<td class="text-right whitespace-nowrap tabular-nums">
+									@amount(g.LastCents)
+									<div class="text-xs text-base-content/60">{ dateDE(g.LastDate) }</div>
+								</td>
+								<td class="text-right whitespace-nowrap tabular-nums">
+									+{ money.FormatDE(g.RiseCents) }
+									if g.Percent > 0 {
+										<div class="text-xs text-base-content/60">+{ itoa(g.Percent) } %</div>
+									}
+								</td>
+								<td class="text-right whitespace-nowrap tabular-nums font-medium">+{ money.FormatDE(g.ExtraYearly) }</td>
+								<td>
+									@verdictButtons(g.RecurringGroup, tabIncreases)
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
 templ recurringPage(d recurringData) {
 	@layout("Recurring", "recurring", d.Inbox) {
 		<h1 class="text-2xl font-semibold mb-1">Recurring</h1>
@@ -455,7 +729,7 @@ templ recurringSection(d recurringData) {
 			</label>
 			<button class="btn btn-sm btn-primary">Add</button>
 			<p class="ml-auto text-sm text-base-content/70">
-				Per month in total: <span class="font-semibold tabular-nums text-base-content">{ money.FormatDE(d.MonthlyCents) }</span>
+				Per month in total: <span class="font-semibold tabular-nums text-base-content">@amount(d.MonthlyCents)</span>
 				if d.Unknown > 0 {
 					· without { plural(d.Unknown, "group", "groups") } of unknown interval
 				}
@@ -474,7 +748,7 @@ templ recurringSection(d recurringData) {
 					<thead>
 						<tr>
 							<th>Active</th><th>Name</th><th>Interval</th><th class="text-right">Transactions</th><th>Last</th>
-							<th class="text-right">Last amount</th><th class="text-right">Per month</th><th>Reserve</th><th>Merge into</th><th></th>
+							<th class="text-right">Last amount</th><th class="text-right">Per month</th><th>Reserve</th><th>Mandatory</th><th>Merge into</th><th></th>
 						</tr>
 					</thead>
 					<tbody>
@@ -521,11 +795,11 @@ templ recurringSection(d recurringData) {
 											<span class="badge badge-xs badge-warning badge-soft ml-1" title="No payment for more than two intervals. If it has ended, switch it to inactive.">ended?</span>
 										}
 									</td>
-									<td class="text-right whitespace-nowrap tabular-nums">{ money.FormatDE(g.LastCents) }</td>
+									<td class="text-right whitespace-nowrap tabular-nums">@amount(g.LastCents)</td>
 								}
 								<td class="text-right whitespace-nowrap tabular-nums font-medium">
 									if cents, ok := g.MonthlyCents(); ok {
-										{ money.FormatDE(cents) }
+										@amount(cents)
 									} else {
 										<span class="text-base-content/50 font-normal">–</span>
 									}
@@ -537,9 +811,24 @@ templ recurringSection(d recurringData) {
 										value="1"
 										class="checkbox checkbox-sm"
 										checked?={ g.CoversReserve }
+										disabled?={ g.Interval == store.IntervalMonthly }
 										aria-label={ "Cover " + g.Name + " by the reserve" }
-										title="Count this group's transactions as irregular expenses for the reserve"
+										title={ reserveTitle(g.Interval) }
 										hx-post={ "/recurring/" + itoa(g.ID) + "/reserve" }
+										hx-target="#recurring"
+										hx-swap="outerHTML"
+									/>
+								</td>
+								<td>
+									<input
+										type="checkbox"
+										name="value"
+										value="1"
+										class="checkbox checkbox-sm"
+										checked?={ g.Mandatory }
+										aria-label={ g.Name + " is mandatory" }
+										title="Cannot be cancelled, such as a loan. Left out when costs are reviewed on the Optimize page."
+										hx-post={ "/recurring/" + itoa(g.ID) + "/mandatory" }
 										hx-target="#recurring"
 										hx-swap="outerHTML"
 									/>

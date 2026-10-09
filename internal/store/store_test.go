@@ -256,6 +256,44 @@ func TestRecurringGroups(t *testing.T) {
 	if err := s.SetRecurringReserve(ctx, a, true); err != nil {
 		t.Fatal(err)
 	}
+	// Only a group that is not monthly can be covered by the reserve, and
+	// becoming monthly ends it.
+	covered := func(id int64) bool {
+		t.Helper()
+		var covers bool
+		if err := s.DB.QueryRow(`SELECT covers_reserve FROM recurring_groups WHERE id = ?`, id).Scan(&covers); err != nil {
+			t.Fatal(err)
+		}
+		return covers
+	}
+	monthly, err := s.EnsureRecurringGroup(ctx, "Monatlich")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecurringReserve(ctx, monthly, true); err != nil || !covered(monthly) {
+		t.Errorf("a group of unknown interval was not covered: %v", err)
+	}
+	if err := s.SetRecurringInterval(ctx, monthly, IntervalMonthly); err != nil || covered(monthly) {
+		t.Errorf("a group that became monthly is still covered (error %v)", err)
+	}
+	if err := s.SetRecurringReserve(ctx, monthly, true); err == nil || covered(monthly) {
+		t.Error("a monthly group was covered by the reserve")
+	}
+	if err := s.SetRecurringReserve(ctx, monthly, false); err != nil {
+		t.Errorf("switching the reserve off for a monthly group: %v", err)
+	}
+	if err := s.SetRecurringInterval(ctx, a, IntervalHalfYearly); err != nil || !covered(a) {
+		t.Errorf("another interval than monthly ended the reserve (error %v)", err)
+	}
+	if err := s.SetRecurringReserve(ctx, 999, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetRecurringReserve(unknown) error = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteRecurringGroup(ctx, monthly); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecurringInterval(ctx, a, IntervalYearly); err != nil {
+		t.Fatal(err)
+	}
 	groups, err := s.ListRecurringGroups(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -356,6 +394,232 @@ func TestRecurringGroups(t *testing.T) {
 	for _, tt := range lapsed {
 		if got := tt.group.Lapsed("2026-10-05"); got != tt.want {
 			t.Errorf("Lapsed(%+v) = %v, want %v", tt.group, got, tt.want)
+		}
+	}
+}
+
+func TestRecurringReview(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	loan, err := s.EnsureRecurringGroup(ctx, "Kredit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.EnsureRecurringGroup(ctx, "Zeitung")
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := func(id int64) string {
+		t.Helper()
+		groups, err := s.ListRecurringGroups(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range groups {
+			if g.ID == id && g.Mandatory {
+				return "mandatory|" + g.Verdict
+			} else if g.ID == id {
+				return "|" + g.Verdict
+			}
+		}
+		return "not listed"
+	}
+
+	steps := []struct {
+		name    string
+		change  func() error
+		wantErr bool
+		want    string // of the loan afterwards
+	}{
+		{"new group", func() error { return nil }, false, "|"},
+		{"cancel", func() error { return s.SetRecurringVerdict(ctx, loan, VerdictCancel) }, false, "|cancel"},
+		{"unknown verdict", func() error { return s.SetRecurringVerdict(ctx, loan, "maybe") }, true, "|cancel"},
+		{"mandatory clears cancel", func() error { return s.SetRecurringMandatory(ctx, loan, true) }, false, "mandatory|"},
+		{"cancel a mandatory group", func() error { return s.SetRecurringVerdict(ctx, loan, VerdictCancel) }, true, "mandatory|"},
+		{"keep a mandatory group", func() error { return s.SetRecurringVerdict(ctx, loan, VerdictKeep) }, false, "mandatory|keep"},
+		{"not mandatory keeps the verdict", func() error { return s.SetRecurringMandatory(ctx, loan, false) }, false, "|keep"},
+		{"mandatory keeps keep", func() error { return s.SetRecurringMandatory(ctx, loan, true) }, false, "mandatory|keep"},
+		{"undecided", func() error { return s.SetRecurringVerdict(ctx, loan, "") }, false, "mandatory|"},
+		// The group merged into keeps its own review.
+		{"merge", func() error { return s.MergeRecurringGroup(ctx, other, loan) }, false, "mandatory|"},
+	}
+	for _, step := range steps {
+		if err := step.change(); (err != nil) != step.wantErr {
+			t.Errorf("%s: error = %v, want an error: %v", step.name, err, step.wantErr)
+		}
+		if got := review(loan); got != step.want {
+			t.Errorf("%s: review = %q, want %q", step.name, got, step.want)
+		}
+	}
+	for name, err := range map[string]error{
+		"mandatory": s.SetRecurringMandatory(ctx, 999, true), "verdict": s.SetRecurringVerdict(ctx, 999, VerdictKeep),
+	} {
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s of an unknown group: error = %v, want ErrNotFound", name, err)
+		}
+	}
+
+	yearly := []struct {
+		group RecurringGroup
+		want  int64
+		ok    bool
+	}{
+		{RecurringGroup{Active: true, Interval: IntervalMonthly, Count: 3, LastCents: -1299}, -15588, true},
+		{RecurringGroup{Active: true, Interval: IntervalQuarterly, Count: 1, LastCents: -5000}, -20000, true},
+		{RecurringGroup{Active: true, Interval: IntervalHalfYearly, Count: 1, LastCents: -5000}, -10000, true},
+		{RecurringGroup{Active: true, Interval: IntervalYearly, Count: 1, LastCents: -10000}, -10000, true},
+		{RecurringGroup{Active: true, Interval: "", Count: 3, LastCents: -1299}, 0, false},
+		{RecurringGroup{Active: false, Interval: IntervalMonthly, Count: 3, LastCents: -1299}, 0, false},
+	}
+	for _, tt := range yearly {
+		if got, ok := tt.group.YearlyCents(); got != tt.want || ok != tt.ok {
+			t.Errorf("YearlyCents(%+v) = %d, %v; want %d, %v", tt.group, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestRecurringCosts(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	account, err := s.CreateAccount(ctx, Account{Slug: "giro", Name: "Giro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`
+		INSERT INTO imports (id, source, file_name, file_sha256, row_count) VALUES (1, 'test', 'test.csv', 'x', 1);
+		INSERT INTO raw_records (id, import_id, line_no, data) VALUES (1, 1, 1, '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	wohnen, _, err := s.EnsureCategory(ctx, "wohnen", "Wohnen", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strom, _, err := s.EnsureCategory(ctx, "wohnen/strom", "Strom", wohnen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freizeit, _, err := s.EnsureCategory(ctx, "freizeit", "Freizeit", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type tx struct {
+		date     string
+		cents    int64
+		category int64 // 0 = uncategorized
+	}
+	groups := []struct {
+		name, interval string
+		txs            []tx
+		want           RecurringCost // the figures only
+		change         int64
+		changed        bool
+	}{
+		{
+			// Compared with the payment a year earlier, not the one before;
+			// most transactions decide the category.
+			"Streaming", IntervalMonthly,
+			[]tx{{"2025-10-10", -1299, freizeit}, {"2026-08-10", -1499, freizeit}, {"2026-09-10", -1499, 0}},
+			RecurringCost{PaidYearCents: -4297, PrevDate: "2025-10-10", PrevCents: -1299, CategoryID: freizeit, CategoryName: "Freizeit"},
+			-200, true,
+		},
+		{
+			// A sub category counts for its main category; the newest
+			// payment is more than twelve months before the date asked for.
+			"Versicherung", IntervalYearly,
+			[]tx{{"2024-10-01", -30000, strom}, {"2025-10-01", -32000, strom}},
+			RecurringCost{PrevDate: "2024-10-01", PrevCents: -30000, CategoryID: wohnen, CategoryName: "Wohnen"},
+			-2000, true,
+		},
+		{
+			// Younger than a year: compared with its first payment. With
+			// as many transactions in each category, the newest decides.
+			"Fitness", IntervalMonthly,
+			[]tx{{"2026-08-01", -700, freizeit}, {"2026-09-01", -700, wohnen}},
+			RecurringCost{PaidYearCents: -1400, PrevDate: "2026-08-01", PrevCents: -700, CategoryID: wohnen, CategoryName: "Wohnen"},
+			0, true,
+		},
+		{
+			"Neu", IntervalMonthly,
+			[]tx{{"2026-09-01", -500, 0}},
+			RecurringCost{PaidYearCents: -500},
+			0, false,
+		},
+		{"Leer", "", nil, RecurringCost{}, 0, false},
+	}
+	n := 0
+	for _, g := range groups {
+		id, err := s.EnsureRecurringGroup(ctx, g.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetRecurringInterval(ctx, id, g.interval); err != nil {
+			t.Fatal(err)
+		}
+		for _, x := range g.txs {
+			n++
+			res, err := s.DB.Exec(`
+				INSERT INTO transactions (account_id, raw_record_id, source, dedup_key, booking_date, amount_cents, recurring_group_id)
+				VALUES (?, 1, 'test', ?, ?, ?, ?)`, account.ID, n, x.date, x.cents, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if x.category == 0 {
+				continue
+			}
+			txID, _ := res.LastInsertId()
+			if _, err := s.DB.Exec(`INSERT INTO allocations (transaction_id, category_id, amount_cents, source) VALUES (?, ?, ?, 'manual')`,
+				txID, x.category, x.cents); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	costs, err := s.ListRecurringCosts(ctx, "2026-10-05")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(costs) != len(groups) {
+		t.Fatalf("%d groups listed, want %d", len(costs), len(groups))
+	}
+	byName := map[string]RecurringCost{}
+	for _, c := range costs {
+		byName[c.Name] = c
+	}
+	for _, g := range groups {
+		got := byName[g.name]
+		if got.Count != len(g.txs) {
+			t.Errorf("%s: Count = %d, want %d", g.name, got.Count, len(g.txs))
+		}
+		figures := got
+		figures.RecurringGroup = RecurringGroup{}
+		if figures != g.want {
+			t.Errorf("%s: figures = %+v, want %+v", g.name, figures, g.want)
+		}
+		if change, ok := got.ChangeCents(); change != g.change || ok != g.changed {
+			t.Errorf("%s: ChangeCents = %d, %v; want %d, %v", g.name, change, ok, g.change, g.changed)
+		}
+	}
+
+	// The change of one payment, for the payments of a year.
+	unknown, ended := byName["Streaming"], byName["Streaming"]
+	unknown.Interval, ended.Active = "", false
+	yearly := []struct {
+		name string
+		cost RecurringCost
+		want int64
+		ok   bool
+	}{
+		{"monthly", byName["Streaming"], -2400, true},
+		{"yearly", byName["Versicherung"], -2000, true},
+		{"unchanged", byName["Fitness"], 0, true},
+		{"no earlier payment", byName["Neu"], 0, false},
+		{"unknown interval", unknown, 0, false},
+		{"ended", ended, 0, false},
+	}
+	for _, tt := range yearly {
+		if got, ok := tt.cost.YearlyChangeCents(); got != tt.want || ok != tt.ok {
+			t.Errorf("YearlyChangeCents, %s = %d, %v; want %d, %v", tt.name, got, ok, tt.want, tt.ok)
 		}
 	}
 }

@@ -1,9 +1,11 @@
 package web
 
 import (
+	"cmp"
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,21 +120,30 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		d.Trend = append(d.Trend, m)
 	}
 	for _, m := range d.Trend[len(d.Trend)-months:] {
-		d.Income += m.IncomeCents
+		d.Income.Cents += m.IncomeCents
+		d.RegularIncome.Cents += m.RegularIncomeCents
 		d.Spending += m.SpendingCents
 	}
-	// Next to the income: for one month the average of the six months before
-	// it, for a longer period its own monthly average.
+	// The income and the regular income: for one month the figure of the
+	// month before, which is complete, and below it the average of that
+	// month and the five before it; for a longer period its sum and its own
+	// monthly average.
 	if months == 1 {
-		var sum int64
 		before := d.Trend[:len(d.Trend)-1]
 		for _, m := range before[len(before)-incomeAverageMonths:] {
-			sum += m.IncomeCents
+			d.Income.Average += m.IncomeCents
+			d.RegularIncome.Average += m.RegularIncomeCents
 		}
-		d.IncomeAverage = roundDiv(sum, incomeAverageMonths)
-		d.IncomeAverageNote = "over the " + strconv.Itoa(incomeAverageMonths) + " months before"
+		d.ShowIncomeLast = true
+		d.LastMonthNote = "last month, " + from.AddDate(0, -1, 0).Format("January 2006")
+		d.Income.Last = before[len(before)-1].IncomeCents
+		d.RegularIncome.Last = before[len(before)-1].RegularIncomeCents
+		d.Income.Average = roundDiv(d.Income.Average, incomeAverageMonths)
+		d.RegularIncome.Average = roundDiv(d.RegularIncome.Average, incomeAverageMonths)
+		d.IncomeAverageNote = "last " + strconv.Itoa(incomeAverageMonths) + " months"
 	} else {
-		d.IncomeAverage = roundDiv(d.Income, int64(months))
+		d.Income.Average = roundDiv(d.Income.Cents, int64(months))
+		d.RegularIncome.Average = roundDiv(d.RegularIncome.Cents, int64(months))
 		d.IncomeAverageNote = "per month"
 	}
 	d.Chart = buildCharts(d)
@@ -511,7 +522,8 @@ func (s *server) recurring(w http.ResponseWriter, r *http.Request) {
 
 // recurringAction runs a change on the group in the path (0 if the path has
 // none) and re-renders the group list, with the error shown above it if the
-// change was refused.
+// change was refused. Posted from the Optimize page (view=optimize), it
+// re-renders the content of that page's tab instead.
 func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change func(id int64) error) {
 	problem := ""
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -525,6 +537,24 @@ func (s *server) recurringAction(w http.ResponseWriter, r *http.Request, change 
 			s.fail(w, r, err)
 			return
 		}
+	}
+	if r.FormValue("view") == "optimize" && r.FormValue("tab") == tabIncreases {
+		d, err := s.increasesData(r, problem)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.render(w, r, increasesSection(d))
+		return
+	}
+	if r.FormValue("view") == "optimize" {
+		d, err := s.optimizeData(r, problem)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.render(w, r, optimizeSection(d))
+		return
 	}
 	d, err := s.recurringData(r, problem)
 	if err != nil {
@@ -568,6 +598,18 @@ func (s *server) recurringActive(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) recurringMandatory(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringMandatory(r.Context(), id, r.FormValue("value") == "1")
+	})
+}
+
+func (s *server) recurringVerdict(w http.ResponseWriter, r *http.Request) {
+	s.recurringAction(w, r, func(id int64) error {
+		return s.st.SetRecurringVerdict(r.Context(), id, r.FormValue("verdict"))
+	})
+}
+
 func (s *server) recurringMerge(w http.ResponseWriter, r *http.Request) {
 	s.recurringAction(w, r, func(id int64) error {
 		intoID, err := formID(r, "into_id")
@@ -582,6 +624,129 @@ func (s *server) recurringDelete(w http.ResponseWriter, r *http.Request) {
 	s.recurringAction(w, r, func(id int64) error {
 		return s.st.DeleteRecurringGroup(r.Context(), id)
 	})
+}
+
+// --- optimize ---------------------------------------------------------------
+
+// optimizeData collects the running expenses for the review: the active
+// groups with a known interval whose newest transaction is an outflow. The
+// totals cover all of them; the filters (mandatory, review) only choose the
+// rows shown.
+func (s *server) optimizeData(r *http.Request, problem string) (optimizeData, error) {
+	ctx := r.Context()
+	d := optimizeData{Error: problem, Mandatory: mandatoryHide, Review: r.FormValue("review")}
+	if r.FormValue("mandatory") == mandatoryShow {
+		d.Mandatory = mandatoryShow
+	}
+	if !slices.Contains(reviewFilters, d.Review) {
+		d.Review = reviewAll
+	}
+	var err error
+	if d.AsOf, err = s.st.LatestDate(ctx); err != nil {
+		return d, err
+	}
+	costs, err := s.st.ListRecurringCosts(ctx, d.AsOf)
+	if err != nil {
+		return d, err
+	}
+	var rows []optimizeRow
+	for _, c := range costs {
+		monthly, yearly, ok := runningExpense(c.RecurringGroup)
+		if !ok {
+			if c.Active && c.Count > 0 && c.LastCents < 0 {
+				d.Unknown++
+			}
+			continue
+		}
+		d.MonthlyCents += monthly
+		d.YearlyCents += yearly
+		switch {
+		case c.Mandatory:
+			d.MandatoryCount++
+			d.MandatoryMonthly += monthly
+			d.MandatoryYearly += yearly
+		case c.Verdict == store.VerdictCancel:
+			d.SavingMonthly += monthly
+			d.SavingYearly += yearly
+		case c.Verdict == "":
+			d.UndecidedCount++
+			d.UndecidedMonthly += monthly
+			d.UndecidedYearly += yearly
+		}
+		if c.Mandatory && d.Mandatory == mandatoryHide {
+			d.Hidden++
+			continue
+		}
+		if d.Review != reviewAll && c.Verdict != reviewVerdicts[d.Review] {
+			continue
+		}
+		rows = append(rows, optimizeRow{RecurringCost: c, MonthlyCents: monthly, YearlyCents: yearly})
+	}
+	d.Categories = optimizeCategories(rows, d.YearlyCents)
+	return d, nil
+}
+
+// increasesData collects the running expenses that got more expensive,
+// mandatory ones included, the highest rise in percent first.
+func (s *server) increasesData(r *http.Request, problem string) (increasesData, error) {
+	ctx := r.Context()
+	d := increasesData{Error: problem}
+	var err error
+	if d.AsOf, err = s.st.LatestDate(ctx); err != nil {
+		return d, err
+	}
+	costs, err := s.st.ListRecurringCosts(ctx, d.AsOf)
+	if err != nil {
+		return d, err
+	}
+	for _, c := range costs {
+		if _, _, ok := runningExpense(c.RecurringGroup); !ok {
+			continue
+		}
+		change, ok := c.ChangeCents()
+		if !ok {
+			continue
+		}
+		d.Compared++
+		if change >= 0 {
+			continue
+		}
+		yearly, _ := c.YearlyChangeCents()
+		row := increaseRow{RecurringCost: c, RiseCents: -change, ExtraYearly: -yearly}
+		if c.PrevCents < 0 {
+			row.Percent = roundDiv(-change*100, -c.PrevCents)
+		}
+		d.ExtraYearly += row.ExtraYearly
+		if c.Mandatory {
+			d.MandatoryCount++
+			d.MandatoryExtra += row.ExtraYearly
+		}
+		d.Rows = append(d.Rows, row)
+	}
+	slices.SortStableFunc(d.Rows, func(a, b increaseRow) int {
+		return cmp.Or(cmp.Compare(b.Percent, a.Percent), cmp.Compare(b.ExtraYearly, a.ExtraYearly), cmp.Compare(a.Name, b.Name))
+	})
+	return d, nil
+}
+
+// optimize shows one of the page's two tabs.
+func (s *server) optimize(w http.ResponseWriter, r *http.Request) {
+	d := optimizePageData{Tab: tabCosts}
+	var err error
+	if r.FormValue("tab") == tabIncreases {
+		d.Tab = tabIncreases
+		d.Increases, err = s.increasesData(r, "")
+	} else {
+		d.Costs, err = s.optimizeData(r, "")
+	}
+	if err == nil {
+		d.Inbox, err = s.st.CountUncategorized(r.Context())
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, optimizePage(d))
 }
 
 // --- reserve ----------------------------------------------------------------

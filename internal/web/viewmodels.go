@@ -1,7 +1,9 @@
 package web
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -51,6 +53,205 @@ func intervalLabel(interval string) string {
 	return "Not known"
 }
 
+// Values of the Optimize page's filters.
+const (
+	mandatoryHide = "hide"
+	mandatoryShow = "show"
+
+	reviewAll       = "all"
+	reviewUndecided = "undecided"
+)
+
+var reviewFilters = []string{reviewAll, reviewUndecided, store.VerdictKeep, store.VerdictCancel}
+
+// reviewVerdicts maps a review filter to the verdict it selects.
+var reviewVerdicts = map[string]string{
+	reviewUndecided: "", store.VerdictKeep: store.VerdictKeep, store.VerdictCancel: store.VerdictCancel,
+}
+
+func reviewLabel(filter string) string {
+	switch filter {
+	case reviewUndecided:
+		return "Undecided"
+	case store.VerdictKeep:
+		return "Keep"
+	case store.VerdictCancel:
+		return "Cancel"
+	}
+	return "All"
+}
+
+// optimizeData is the review of the running recurring expenses. The totals
+// cover every such group, whatever the filters show.
+type optimizeData struct {
+	Categories []optimizeCategory
+	// MonthlyCents and YearlyCents sum all groups considered.
+	MonthlyCents int64
+	YearlyCents  int64
+	// Mandatory groups cannot be cancelled.
+	MandatoryCount   int
+	MandatoryMonthly int64
+	MandatoryYearly  int64
+	// Saving sums the groups marked "cancel".
+	SavingMonthly int64
+	SavingYearly  int64
+	// Undecided groups are neither mandatory nor have a verdict.
+	UndecidedCount   int
+	UndecidedMonthly int64
+	UndecidedYearly  int64
+	// Unknown counts the active expense groups left out because their
+	// interval is not known, Hidden the mandatory ones filtered out.
+	Unknown int
+	Hidden  int
+	// The filters: mandatoryHide or mandatoryShow, and one of reviewFilters.
+	Mandatory string
+	Review    string
+	AsOf      string
+	Error     string
+}
+
+// Tabs of the Optimize page.
+const (
+	tabCosts     = "costs"
+	tabIncreases = "increases"
+)
+
+// optimizePageData holds the data of the tab shown; the other stays empty.
+type optimizePageData struct {
+	Tab       string
+	Costs     optimizeData
+	Increases increasesData
+	Inbox     int
+}
+
+// tabTarget is the element a change made on a tab re-renders.
+func tabTarget(tab string) string {
+	if tab == tabIncreases {
+		return "#increases"
+	}
+	return "#optimize"
+}
+
+// runningExpense reports whether a group is a cost that is still paid: it
+// is active, has an interval and its newest transaction is an outflow.
+func runningExpense(g store.RecurringGroup) (monthly, yearly int64, ok bool) {
+	monthly, ok = g.MonthlyCents()
+	if !ok || g.LastCents >= 0 {
+		return 0, 0, false
+	}
+	yearly, _ = g.YearlyCents()
+	return monthly, yearly, true
+}
+
+// increasesData is the running expenses that got more expensive.
+type increasesData struct {
+	Rows []increaseRow
+	// ExtraYearly is what the rises cost per year in total, MandatoryCount
+	// and MandatoryExtra the part of the mandatory groups.
+	ExtraYearly    int64
+	MandatoryCount int
+	MandatoryExtra int64
+	// Compared counts the running expenses that have an earlier payment to
+	// compare with, risen or not.
+	Compared int
+	AsOf     string
+	Error    string
+}
+
+// increaseRow is a group whose price rose. Its figures are positive.
+type increaseRow struct {
+	store.RecurringCost
+	// RiseCents is the rise per payment, ExtraYearly per year. Percent is
+	// the rise relative to the earlier payment, 0 if that was no outflow.
+	RiseCents   int64
+	ExtraYearly int64
+	Percent     int64
+}
+
+// optimizeCategory is the groups mostly booked to one main category.
+type optimizeCategory struct {
+	Name         string
+	MonthlyCents int64
+	YearlyCents  int64
+	Rows         []optimizeRow
+}
+
+type optimizeRow struct {
+	store.RecurringCost
+	MonthlyCents int64
+	YearlyCents  int64
+	// Share is the group's part of all recurring expenses, in percent.
+	Share int64
+}
+
+// optimizeCategories sorts the rows into their categories, the most
+// expensive category and, within each, the most expensive group first.
+func optimizeCategories(rows []optimizeRow, totalYearly int64) []optimizeCategory {
+	var categories []optimizeCategory
+	index := map[int64]int{}
+	for _, row := range rows {
+		if totalYearly != 0 {
+			row.Share = roundDiv(-row.YearlyCents*100, -totalYearly)
+		}
+		i, ok := index[row.CategoryID]
+		if !ok {
+			i = len(categories)
+			index[row.CategoryID] = i
+			name := row.CategoryName
+			if row.CategoryID == 0 {
+				name = "Uncategorized"
+			}
+			categories = append(categories, optimizeCategory{Name: name})
+		}
+		categories[i].MonthlyCents += row.MonthlyCents
+		categories[i].YearlyCents += row.YearlyCents
+		categories[i].Rows = append(categories[i].Rows, row)
+	}
+	// Costs are negative: the smallest number is the most expensive.
+	slices.SortStableFunc(categories, func(a, b optimizeCategory) int {
+		return cmp.Or(cmp.Compare(a.YearlyCents, b.YearlyCents), cmp.Compare(a.Name, b.Name))
+	})
+	for _, c := range categories {
+		slices.SortStableFunc(c.Rows, func(a, b optimizeRow) int {
+			return cmp.Or(cmp.Compare(a.YearlyCents, b.YearlyCents), cmp.Compare(a.Name, b.Name))
+		})
+	}
+	return categories
+}
+
+// changeLabel says how the price moved since the payment compared with, ""
+// if there is none. more is true if the group got more expensive.
+func (r optimizeRow) changeLabel() (label string, more bool) {
+	change, ok := r.ChangeCents()
+	switch {
+	case !ok:
+		return "", false
+	case change == 0:
+		return "same as on " + dateDE(r.PrevDate), false
+	case change < 0:
+		return "+" + money.FormatDE(-change) + " since " + dateDE(r.PrevDate), true
+	default:
+		return money.FormatDE(-change) + " since " + dateDE(r.PrevDate), false
+	}
+}
+
+// reserveTitle explains the Reserve checkbox of a group with the given
+// interval.
+func reserveTitle(interval string) string {
+	if interval == store.IntervalMonthly {
+		return "A monthly group cannot be covered by the reserve; that is for expenses that come less often"
+	}
+	return "Count this group's transactions as irregular expenses for the reserve"
+}
+
+// cancelTitle explains the Cancel button of a group.
+func cancelTitle(mandatory bool) string {
+	if mandatory {
+		return "A mandatory group cannot be cancelled"
+	}
+	return "Mark to be cancelled"
+}
+
 // Values of the list's "recurring" filter besides a group id.
 const (
 	recurringAny      = "any"
@@ -84,11 +285,17 @@ type overviewData struct {
 	Prev, Next         string // URLs of the periods of the same length before and after
 	Presets            []rangePreset
 	From, To           string // first and last day
-	Income             int64
-	Spending           int64 // negative
-	// IncomeAverage is a monthly average shown next to the income;
-	// IncomeAverageNote says over which months.
-	IncomeAverage     int64
+	// Income is all income of the period, RegularIncome the part that
+	// belongs to a recurring group.
+	Income        incomeFigures
+	RegularIncome incomeFigures
+	Spending      int64 // negative
+	// ShowIncomeLast is set for a period of one month: the income boxes
+	// then show the month before, named by LastMonthNote, because the month
+	// shown may still be running. IncomeAverageNote says over which months
+	// the averages are taken.
+	ShowIncomeLast    bool
+	LastMonthNote     string
 	IncomeAverageNote string
 	Inbox             int
 	// Account balances at the end of BalanceDate.
@@ -98,6 +305,14 @@ type overviewData struct {
 	Categories   []store.CategoryTotal
 	Trend        []store.MonthTotal
 	Chart        chartData
+}
+
+// incomeFigures are the sum of the period, the figure of the month before it
+// and a monthly average.
+type incomeFigures struct {
+	Cents   int64
+	Last    int64
+	Average int64
 }
 
 // rangePreset is a shortcut to a period of the overview.
@@ -113,6 +328,15 @@ func (d overviewData) periodNote() string {
 		return "this month"
 	}
 	return "in these " + strconv.Itoa(d.Months) + " months"
+}
+
+// netNote is the line below the net figure. For a single month it says that
+// the figure is that month's, unlike the income shown beside it.
+func (d overviewData) netNote() string {
+	if d.ShowIncomeLast {
+		return "income minus spending, this month"
+	}
+	return "income minus spending"
 }
 
 // monthsBetween counts the months from one month to another, both included.
