@@ -2,14 +2,15 @@
 
 A local, single-user personal finance app: import bank transactions, categorize them, and analyze spending. The data lives in one SQLite file on your machine and can always be exported.
 
-> **Status: early rewrite.** The project is being rebuilt in Go. Importing (Finanzguru and DKB), the web UI (inbox, transactions, overview, categories, import), CSV/Parquet export and backup work. The DKB importer has only been tested with made-up files so far. Automatic categorization is not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
+> **Status: early rewrite.** The project is being rebuilt in Go. Importing (Finanzguru and DKB), the web UI (inbox, transactions, overview, recurring groups, cost review, reserve, categories, import), CSV/Parquet export and backup work. The DKB importer has only been tested with made-up files so far. Automatic categorization is not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
 
 ## What it will do
 
 - **Import** a Finanzguru export, as often as needed. Each export contains the full history; only new transactions are added.
 - **Categorize** transactions by hand in an inbox that works entirely from the keyboard.
-- **Analyze** with a monthly overview (income, spending per category) and a filterable transaction list.
+- **Analyze** with an overview of any period of months (income, regular income, spending per category) and a filterable transaction list.
 - **Group recurring transactions** such as rent, subscriptions and insurances, see what each costs per month, and filter the transaction list by them.
+- **Review recurring costs**: see what the running groups cost per month and year, mark what could be cancelled, and find what got more expensive.
 - **Plan a reserve** for bills that come only once or twice a year: mark them, and Budgeteer tells you how much to move to your reserve account each month.
 - **Export** everything as CSV or Parquet, and back up the database with one command.
 
@@ -48,7 +49,19 @@ All commands take `--db` (default `./data/budgeteer.db`).
 
 Recurring transactions are collected in named groups, one per series ("Miete", "Strom", ...). Contracts that Finanzguru detects become groups when a file is imported; to fill in transactions imported earlier, import the last file once more with `--force`. Press `g` on a transaction in the inbox or the transaction list to put it into a group, create a new one by typing its name, or take it out. The transaction list has a "Recurring" filter for all groups or a single one.
 
-The Recurring page lists the groups with their interval and cost per month, and lets you rename, merge and delete them. What you change by hand is kept by later imports, and a deleted group does not come back. A series that has ended, such as a cancelled subscription, can be switched to inactive: it keeps its transactions but no longer counts for the monthly cost, and the transaction list can show active or inactive groups only. Groups without a payment for more than two intervals are marked "ended?" as a hint. A group can be switched to "Reserve": all its transactions then count as irregular expenses for the reserve below.
+The Recurring page lists the groups with their interval and cost per month, and lets you rename, merge and delete them. What you change by hand is kept by later imports, and a deleted group does not come back. A series that has ended, such as a cancelled subscription, can be switched to inactive: it keeps its transactions but no longer counts for the monthly cost, and the transaction list can show active or inactive groups only. Groups without a payment for more than two intervals are marked "ended?" as a hint. A group that is not monthly can be switched to "Reserve": all its transactions then count as irregular expenses for the reserve below.
+
+Income can be grouped as well. The overview shows the income that belongs to a group as "Regular income", next to the total. When a single month is shown, both boxes give the income of the month before, which is complete, and the average of that month and the five before it.
+
+## Optimizing recurring costs
+
+The Optimize page reviews the running expenses: groups that are active, have an interval and whose newest transaction is an outflow.
+
+The **Costs** tab lists them under their main category with the cost per month and per year, their share of the total, what was really paid in the last twelve months and the price change against the payment about a year earlier. Mark a group that cannot be cancelled, such as a loan, as mandatory (also possible on the Recurring page); mandatory groups are hidden unless the filter shows them. For the others, record a verdict with "Keep" or "Cancel". The boxes at the top total all recurring costs, the mandatory part, what cancelling the marked groups would save and what is still undecided. Nothing is switched off by itself: once something is really cancelled, set its group to inactive on the Recurring page.
+
+The **Price increases** tab lists every group whose newest payment is higher than the one compared with, mandatory ones included, since an insurance or a bank account can be moved to a better offer. It shows the amount before and now, the rise in percent, which sorts the list, and what it costs more per year.
+
+The mandatory flag and the verdict are manual work and are kept by later imports.
 
 ## Reserve for irregular expenses
 
