@@ -177,7 +177,7 @@ func TestOverview(t *testing.T) {
 	// September). The net figure stays this month's.
 	for _, want := range []string{
 		`<span class="">` + money.FormatDE(0), "last month, August 2026",
-		"⌀ " + money.FormatDE(0) + " last month and the 5 before", "income minus spending, this month",
+		"⌀ " + money.FormatDE(0) + " last 6 months", "income minus spending, this month",
 		`name="from" value="2026-09"`, `name="to" value="2026-09"`,
 		`href="/?month=2026-08" aria-label="Earlier`, `href="/?month=2026-10" aria-label="Later`,
 	} {
@@ -188,7 +188,7 @@ func TestOverview(t *testing.T) {
 	_, october := e.get("/?month=2026-10")
 	for _, want := range []string{
 		`<span class="text-success">` + money.FormatDE(250000), "last month, September 2026",
-		"⌀ " + money.FormatDE(41667) + " last month and the 5 before",
+		"⌀ " + money.FormatDE(41667) + " last 6 months",
 	} {
 		if !strings.Contains(october, want) {
 			t.Errorf("October should show September's income and its average over six months, lacks %q", want)
@@ -214,7 +214,7 @@ func TestOverview(t *testing.T) {
 		"/?month=2026-09": {`<span class="">` + money.FormatDE(0), "last month, August 2026"},
 		"/?month=2026-10": {
 			`<span class="text-success">` + money.FormatDE(250000), "last month, September 2026",
-			"⌀ " + money.FormatDE(41667) + " last month and the 5 before",
+			"⌀ " + money.FormatDE(41667) + " last 6 months",
 		},
 		"/?from=2026-08&to=2026-10": {`<span class="text-success">` + money.FormatDE(250000), "⌀ " + money.FormatDE(83333) + " per month"},
 	} {

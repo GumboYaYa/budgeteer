@@ -140,7 +140,7 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		d.RegularIncome.Last = before[len(before)-1].RegularIncomeCents
 		d.Income.Average = roundDiv(d.Income.Average, incomeAverageMonths)
 		d.RegularIncome.Average = roundDiv(d.RegularIncome.Average, incomeAverageMonths)
-		d.IncomeAverageNote = "last month and the " + strconv.Itoa(incomeAverageMonths-1) + " before"
+		d.IncomeAverageNote = "last " + strconv.Itoa(incomeAverageMonths) + " months"
 	} else {
 		d.Income.Average = roundDiv(d.Income.Cents, int64(months))
 		d.RegularIncome.Average = roundDiv(d.RegularIncome.Cents, int64(months))

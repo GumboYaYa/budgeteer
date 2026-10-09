@@ -30,7 +30,7 @@ templ overviewPage(d overviewData) {
 			</div>
 		</div>
 		<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-			@incomeTile("Income", d.Income, d)
+			@incomeTile("Total Income", d.Income, d)
 			@incomeTile("Regular income", d.RegularIncome, d)
 			@amountTile("Spending", d.Spending, d.periodNote())
 			@amountTile("Net", d.Income.Cents+d.Spending, d.netNote())

@@ -43,6 +43,14 @@ budgeteer backup [--out dir]
 
 All commands take `--db` (default `./data/budgeteer.db`).
 
+### Accounts and their slugs
+
+Every account has a slug, a short lower-case key such as `gemeinschaftskonto`. The flags `--slug` and `--account` expect this slug, written exactly as `budgeteer account list` prints it, not the display name. Accounts created by a Finanzguru import get their slug from the account's name; `account add` lets you choose it.
+
+- `import dkb --account <slug>` says which of your accounts the file belongs to. A DKB export covers one account and the importer does not work that out from the file. `import finanzguru` needs no such flag: its export spans all accounts and names them.
+- `account set-cutover --slug <slug> --date YYYY-MM-DD` sets the day on which the account's source changes from Finanzguru to the bank export. See [Switching an account from Finanzguru to DKB](#switching-an-account-from-finanzguru-to-dkb).
+- `account set-reserve --slug <slug>` chooses the account that holds the money set aside for irregular bills; `--none` clears it. Only one account can hold the reserve. See [Reserve for irregular expenses](#reserve-for-irregular-expenses).
+
 `export` writes to `data/export/` and `backup` to `data/backups/` unless `--out` is given. The file to open in a spreadsheet is `transactions_flat.csv`: one row per transaction with account, category and tags. Its `amount` column uses a dot as decimal separator (`-9.99`); if your spreadsheet expects a comma, use `amount_cents` instead.
 
 ## Recurring transactions
@@ -67,7 +75,7 @@ The mandatory flag and the verdict are manual work and are kept by later imports
 
 Taxes, insurances and similar bills come once or twice a year. Mark such a transaction with `r` in the inbox or the transaction list. Every bill marked in the past twelve months is expected again one year later with the same amount; a half-yearly bill is simply marked twice.
 
-The Reserve page (and `budgeteer reserve`) shows the amount to move each month. Normally that is a twelfth of the bills of a year. If you choose the account the reserve is saved on, its balance counts as already saved, and the amount rises for as long as a bill would otherwise come due before the money is there. Everything is calculated as of the newest imported transaction.
+The Reserve page (and `budgeteer reserve`) shows the amount to move each month. Normally that is a twelfth of the bills of a year. If you choose the account the reserve is saved on, with the select at the top of the Reserve page or with `budgeteer account set-reserve`, its balance counts as already saved: the page shows whether you are ahead or behind, and the amount rises for as long as a bill would otherwise come due before the money is there. Choosing the account marks no transactions; which bills count is decided by `r` and by the "Reserve" setting of a recurring group. Everything is calculated as of the newest imported transaction.
 
 ## Switching an account from Finanzguru to DKB
 
@@ -78,6 +86,8 @@ budgeteer import finanzguru data/finanzguru.csv          # one last full export
 budgeteer account set-cutover --slug <slug> --date 2026-10-05   # the last day it covers
 budgeteer import dkb --account <slug> data/dkb.csv       # may start earlier; older rows are skipped
 ```
+
+The date is set per account, so one account can move to DKB while another stays on Finanzguru. Choose the last day the Finanzguru export covers: a date is rejected if the account already has Finanzguru transactions after it, or transactions from DKB on or before it, because a day would then be covered by both sources.
 
 DKB exports may overlap each other. Bookings that are still pending (`Vorgemerkt`) are left out and come with a later export.
 
