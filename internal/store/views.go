@@ -312,6 +312,42 @@ func (s *Store) MainCategoryTotals(ctx context.Context, from, to string) ([]Cate
 	return totals, rows.Err()
 }
 
+// CategoryMonthTotal is the net amount of one main category in one month.
+// CategoryID 0 stands for transactions without a category.
+type CategoryMonthTotal struct {
+	Month      string // YYYY-MM
+	CategoryID int64
+	Name       string
+	Cents      int64
+}
+
+// MainCategoryMonthlyTotals sums the transactions per month and main
+// category between the two months inclusive, transfers excluded. Months in
+// which a category has no transactions are missing.
+func (s *Store) MainCategoryMonthlyTotals(ctx context.Context, fromMonth, toMonth string) ([]CategoryMonthTotal, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT substr(t.booking_date, 1, 7), COALESCE(p.id, c.id, 0), COALESCE(p.name, c.name, ''), sum(t.amount_cents)
+		FROM transactions t
+		LEFT JOIN allocations al ON al.transaction_id = t.id AND al.source <> 'suggested'
+		LEFT JOIN categories c ON c.id = al.category_id
+		LEFT JOIN categories p ON p.id = c.parent_id
+		WHERE t.is_transfer = 0 AND substr(t.booking_date, 1, 7) BETWEEN ? AND ?
+		GROUP BY 1, 2 ORDER BY 1, 2`, fromMonth, toMonth)
+	if err != nil {
+		return nil, fmt.Errorf("store: category month totals: %w", err)
+	}
+	defer rows.Close()
+	var totals []CategoryMonthTotal
+	for rows.Next() {
+		var c CategoryMonthTotal
+		if err := rows.Scan(&c.Month, &c.CategoryID, &c.Name, &c.Cents); err != nil {
+			return nil, fmt.Errorf("store: category month totals: %w", err)
+		}
+		totals = append(totals, c)
+	}
+	return totals, rows.Err()
+}
+
 // EarliestDate returns the booking date of the oldest transaction, or "" if
 // there are none.
 func (s *Store) EarliestDate(ctx context.Context) (string, error) {

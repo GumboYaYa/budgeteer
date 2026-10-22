@@ -623,3 +623,71 @@ func TestRecurringCosts(t *testing.T) {
 		}
 	}
 }
+
+func TestMainCategoryMonthlyTotals(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	account, err := s.CreateAccount(ctx, Account{Slug: "giro", Name: "Giro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`
+		INSERT INTO imports (id, source, file_name, file_sha256, row_count) VALUES (1, 'test', 'test.csv', 'x', 1);
+		INSERT INTO raw_records (id, import_id, line_no, data) VALUES (1, 1, 1, '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	wohnen, _, err := s.EnsureCategory(ctx, "wohnen", "Wohnen", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strom, _, err := s.EnsureCategory(ctx, "wohnen/strom", "Strom", wohnen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, x := range []struct {
+		date     string
+		cents    int64
+		category int64
+		transfer bool
+	}{
+		{"2026-07-31", -100, wohnen, false}, // before the range
+		{"2026-08-01", -1000, wohnen, false},
+		{"2026-08-15", -250, strom, false}, // counts for its main category
+		{"2026-08-20", -999, 0, false},
+		{"2026-08-21", -5000, 0, true}, // a transfer is left out
+		{"2026-09-30", 300, wohnen, false},
+		{"2026-10-01", -100, wohnen, false}, // after the range
+	} {
+		res, err := s.DB.Exec(`
+			INSERT INTO transactions (account_id, raw_record_id, source, dedup_key, booking_date, amount_cents, is_transfer)
+			VALUES (?, 1, 'test', ?, ?, ?, ?)`, account.ID, i, x.date, x.cents, x.transfer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if x.category == 0 {
+			continue
+		}
+		txID, _ := res.LastInsertId()
+		if _, err := s.DB.Exec(`INSERT INTO allocations (transaction_id, category_id, amount_cents, source) VALUES (?, ?, ?, 'manual')`,
+			txID, x.category, x.cents); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.MainCategoryMonthlyTotals(ctx, "2026-08", "2026-09")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []CategoryMonthTotal{
+		{Month: "2026-08", CategoryID: 0, Name: "", Cents: -999},
+		{Month: "2026-08", CategoryID: wohnen, Name: "Wohnen", Cents: -1250},
+		{Month: "2026-09", CategoryID: wohnen, Name: "Wohnen", Cents: 300},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

@@ -23,9 +23,9 @@ const (
 	inboxPageSize = 200
 	listPageSize  = 100
 	maxUploadSize = 64 << 20
-	// incomeAverageMonths is the number of months the overview averages the
-	// income over.
-	incomeAverageMonths = 6
+	// defaultAvgMonths is the number of months the overview takes its
+	// typical month from unless ?avg= chooses one of avgMonthOptions.
+	defaultAvgMonths = 6
 	// trendMinMonths is the least number of months in the overview's chart.
 	trendMinMonths = 12
 	// overviewMaxMonths limits the period the overview accepts.
@@ -33,6 +33,8 @@ const (
 
 	monthLayout = "2006-01"
 )
+
+var avgMonthOptions = []int{3, 6, 12}
 
 // --- overview ---------------------------------------------------------------
 
@@ -56,16 +58,21 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 	oldest, _ := time.Parse(monthLayout, earliest[:7])
 	from, to := overviewRange(r.URL.Query(), newest)
 	months := monthsBetween(from, to)
+	avg := overviewAvg(r.URL.Query())
 
 	d := overviewData{
 		FromMonth: from.Format(monthLayout),
 		ToMonth:   to.Format(monthLayout),
 		Months:    months,
 		Label:     rangeLabel(from, to),
-		Prev:      rangeURL(from.AddDate(0, -months, 0), to.AddDate(0, -months, 0)),
-		Next:      rangeURL(from.AddDate(0, months, 0), to.AddDate(0, months, 0)),
+		Prev:      rangeURL(from.AddDate(0, -months, 0), to.AddDate(0, -months, 0), avg),
+		Next:      rangeURL(from.AddDate(0, months, 0), to.AddDate(0, months, 0), avg),
 		From:      from.Format(time.DateOnly),
 		To:        to.AddDate(0, 1, -1).Format(time.DateOnly),
+		Avg:       avg,
+	}
+	for _, n := range avgMonthOptions {
+		d.AvgOptions = append(d.AvgOptions, rangePreset{Label: strconv.Itoa(n), URL: rangeURL(from, to, n), Active: n == avg})
 	}
 	// The shortcuts are counted back from the newest month with transactions.
 	for _, p := range []struct {
@@ -79,7 +86,7 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		{"All", oldest},
 	} {
 		d.Presets = append(d.Presets, rangePreset{
-			Label: p.label, URL: rangeURL(p.from, newest), Active: p.from.Equal(from) && newest.Equal(to),
+			Label: p.label, URL: rangeURL(p.from, newest, avg), Active: p.from.Equal(from) && newest.Equal(to),
 		})
 	}
 	if d.Inbox, err = s.st.CountUncategorized(ctx); err != nil {
@@ -101,12 +108,23 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The chart shows every month of the period, and at least twelve.
+	// The chart shows every month of the period, and at least twelve. The
+	// typical month is taken from the avg months before the newest month
+	// shown, but not from before the oldest transaction.
 	trendFrom := to.AddDate(0, 1-trendMinMonths, 0)
 	if from.Before(trendFrom) {
 		trendFrom = from
 	}
-	trend, err := s.st.MonthlyTotals(ctx, trendFrom.Format(monthLayout), d.ToMonth)
+	typicalFrom := to.AddDate(0, -avg, 0)
+	if typicalFrom.Before(oldest) {
+		typicalFrom = oldest
+	}
+	typicalTo := to.AddDate(0, -1, 0)
+	queryFrom := trendFrom
+	if typicalFrom.Before(queryFrom) {
+		queryFrom = typicalFrom
+	}
+	trend, err := s.st.MonthlyTotals(ctx, queryFrom.Format(monthLayout), d.ToMonth)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -116,41 +134,99 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request) {
 	for _, m := range trend {
 		byMonth[m.Month] = m
 	}
-	for month := trendFrom; !month.After(to); month = month.AddDate(0, 1, 0) {
+	var all []store.MonthTotal
+	for month := queryFrom; !month.After(to); month = month.AddDate(0, 1, 0) {
 		m := byMonth[month.Format(monthLayout)]
 		m.Month = month.Format(monthLayout)
-		d.Trend = append(d.Trend, m)
+		all = append(all, m)
 	}
+	d.Trend = all[monthsBetween(queryFrom, trendFrom)-1:]
 	for _, m := range d.Trend[len(d.Trend)-months:] {
 		d.Income.Cents += m.IncomeCents
 		d.RegularIncome.Cents += m.RegularIncomeCents
 		d.Spending += m.SpendingCents
 	}
-	// The income and the regular income: for one month the figure of the
-	// month before, which is complete, and below it the average of that
-	// month and the five before it; for a longer period its sum and its own
-	// monthly average.
+	// For one month the income boxes show the month before, which is
+	// complete.
 	if months == 1 {
-		before := d.Trend[:len(d.Trend)-1]
-		for _, m := range before[len(before)-incomeAverageMonths:] {
-			d.Income.Average += m.IncomeCents
-			d.RegularIncome.Average += m.RegularIncomeCents
-		}
+		before := d.Trend[len(d.Trend)-2]
 		d.ShowIncomeLast = true
 		d.LastMonthNote = "last month, " + from.AddDate(0, -1, 0).Format("January 2006")
-		d.Income.Last = before[len(before)-1].IncomeCents
-		d.RegularIncome.Last = before[len(before)-1].RegularIncomeCents
-		d.Income.Average = roundDiv(d.Income.Average, incomeAverageMonths)
-		d.RegularIncome.Average = roundDiv(d.RegularIncome.Average, incomeAverageMonths)
-		d.IncomeAverageNote = "last " + strconv.Itoa(incomeAverageMonths) + " months"
-	} else {
-		d.Income.Average = roundDiv(d.Income.Cents, int64(months))
-		d.RegularIncome.Average = roundDiv(d.RegularIncome.Cents, int64(months))
-		d.IncomeAverageNote = "per month"
+		d.Income.Last = before.IncomeCents
+		d.RegularIncome.Last = before.RegularIncomeCents
+	}
+	if !typicalFrom.After(typicalTo) {
+		window := all[monthsBetween(queryFrom, typicalFrom)-1 : monthsBetween(queryFrom, typicalTo)]
+		cats, err := s.st.MainCategoryMonthlyTotals(ctx, typicalFrom.Format(monthLayout), typicalTo.Format(monthLayout))
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		d.Typical = typicalOf(window, cats)
+		d.Typical.From = typicalFrom.Format(monthLayout)
+		d.Typical.Label = rangeLabelShort(typicalFrom, typicalTo)
+		d.Categories = withTypicalCategories(d.Categories, cats, d.Typical.Categories)
 	}
 	d.Chart = buildCharts(d)
 
 	s.render(w, r, overviewPage(d))
+}
+
+// overviewAvg reads the number of months the typical month is taken from.
+func overviewAvg(q url.Values) int {
+	n, err := strconv.Atoi(q.Get("avg"))
+	if err == nil && slices.Contains(avgMonthOptions, n) {
+		return n
+	}
+	return defaultAvgMonths
+}
+
+// typicalOf takes the medians of the months of the window, oldest first,
+// and of the category totals of the same months.
+func typicalOf(window []store.MonthTotal, cats []store.CategoryMonthTotal) typicalMonth {
+	t := typicalMonth{Months: len(window), Categories: map[int64]int64{}}
+	var income, regular, spending, net []int64
+	index := make(map[string]int, len(window))
+	for i, m := range window {
+		index[m.Month] = i
+		income = append(income, m.IncomeCents)
+		regular = append(regular, m.RegularIncomeCents)
+		spending = append(spending, m.SpendingCents)
+		net = append(net, m.IncomeCents+m.SpendingCents)
+	}
+	t.Income, t.RegularIncome, t.Spending, t.Net = median(income), median(regular), median(spending), median(net)
+	perCategory := map[int64][]int64{}
+	for _, c := range cats {
+		if perCategory[c.CategoryID] == nil {
+			perCategory[c.CategoryID] = make([]int64, len(window))
+		}
+		perCategory[c.CategoryID][index[c.Month]] = c.Cents
+	}
+	for id, xs := range perCategory {
+		t.Categories[id] = median(xs)
+	}
+	return t
+}
+
+// withTypicalCategories adds the main categories that are typical but have
+// no transactions in the period, so their absence shows; they come last,
+// most negative first.
+func withTypicalCategories(totals []store.CategoryTotal, cats []store.CategoryMonthTotal, typical map[int64]int64) []store.CategoryTotal {
+	shown := map[int64]bool{}
+	for _, c := range totals {
+		shown[c.CategoryID] = true
+	}
+	var missing []store.CategoryTotal
+	for _, c := range cats {
+		if !shown[c.CategoryID] && typical[c.CategoryID] != 0 {
+			shown[c.CategoryID] = true
+			missing = append(missing, store.CategoryTotal{CategoryID: c.CategoryID, Name: c.Name})
+		}
+	}
+	slices.SortFunc(missing, func(a, b store.CategoryTotal) int {
+		return cmp.Or(cmp.Compare(typical[a.CategoryID], typical[b.CategoryID]), cmp.Compare(a.Name, b.Name))
+	})
+	return append(totals, missing...)
 }
 
 // overviewRange reads the months to show: ?month= for a single one, or ?from=

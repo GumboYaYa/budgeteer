@@ -8,10 +8,15 @@
 @source "../static/app.js";
 
 /* Chart colors: categorical slots 1 and 2 of the data-viz palette, with a
-   separate step for the dark surface. */
+   separate step for the dark surface. The strong steps draw the median lines
+   so they stay visible where they cross a bar of their own series; the
+   typical step is the pale comparison bar. */
 :root {
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-1-strong: #174a8a;
+  --series-2-strong: #9a3a12;
+  --series-typical: #a9c8ef;
   --chart-ink: #52514e;
   --chart-grid: #e6e5e0;
   --chart-surface: #ffffff;
@@ -20,6 +25,9 @@
   :root {
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-1-strong: #a6cbf5;
+    --series-2-strong: #f5b394;
+    --series-typical: #2c4a70;
     --chart-ink: #c3c2b7;
     --chart-grid: #34373d;
     --chart-surface: #1d232a;

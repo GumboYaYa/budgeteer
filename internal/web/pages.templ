@@ -20,7 +20,16 @@ templ overviewPage(d overviewData) {
 						<a class={ "join-item btn btn-sm", templ.KV("btn-neutral", p.Active) } href={ templ.SafeURL(p.URL) } aria-current?={ p.Active }>{ p.Label }</a>
 					}
 				</div>
+				<div class="join items-center" role="group" aria-label="Months the typical month is taken from">
+					<span class="join-item btn btn-sm btn-disabled" title="The typical month is the median of this many months before the newest month shown">Median of</span>
+					for _, p := range d.AvgOptions {
+						<a class={ "join-item btn btn-sm", templ.KV("btn-neutral", p.Active) } href={ templ.SafeURL(p.URL) } aria-current?={ p.Active } aria-label={ p.Label + " months" }>{ p.Label }</a>
+					}
+				</div>
 				<form action="/" method="get" class="join items-center">
+					if d.Avg != defaultAvgMonths {
+						<input type="hidden" name="avg" value={ strconv.Itoa(d.Avg) }/>
+					}
 					<a class="join-item btn btn-sm" href={ templ.SafeURL(d.Prev) } aria-label="Earlier period of the same length">‹</a>
 					<input type="month" name="from" value={ d.FromMonth } class="join-item input input-sm" onchange="this.form.submit()" aria-label="From month"/>
 					<span class="join-item btn btn-sm btn-disabled px-2" aria-hidden="true">–</span>
@@ -30,17 +39,20 @@ templ overviewPage(d overviewData) {
 			</div>
 		</div>
 		<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-			@incomeTile("Total Income", d.Income, d)
-			@incomeTile("Regular income", d.RegularIncome, d)
-			@amountTile("Spending", d.Spending, d.periodNote())
-			@amountTile("Net", d.Income.Cents+d.Spending, d.netNote())
+			@incomeTile("Total Income", d.Income, d.Typical.Income, d)
+			@incomeTile("Regular income", d.RegularIncome, d.Typical.RegularIncome, d)
+			@amountTile("Spending", d.Spending, d.periodNote(), d.Typical.Spending, d)
+			@amountTile("Net", d.Income.Cents+d.Spending, d.netNote(), d.Typical.Net, d)
 			<a href="/inbox" class="bg-base-100 rounded-box border border-base-300 p-4 hover:border-primary">
 				<div class="text-sm text-base-content/60">Inbox</div>
 				<div class="text-2xl font-semibold tabular-nums">{ strconv.Itoa(d.Inbox) }</div>
 				<div class="text-xs text-base-content/60">uncategorized in total</div>
 			</a>
 		</div>
-		<p class="text-xs text-base-content/60 mb-4">Transfers between your own accounts are left out of income, spending and the category figures.</p>
+		<p class="text-xs text-base-content/60 mb-4">
+			Transfers between your own accounts are left out of income, spending and the category figures.
+			The typical month is the median of the { strconv.Itoa(d.Avg) } months before { monthLong(d.ToMonth) }, so a single unusual month does not move it.
+		</p>
 		if len(d.Balances) > 0 {
 			<section class="bg-base-100 rounded-box border border-base-300 p-4 mb-4">
 				<h2 class="font-semibold mb-2">Account balances on { dateDE(d.BalanceDate) }</h2>
@@ -82,7 +94,7 @@ templ overviewPage(d overviewData) {
 					<h2 class="font-semibold mb-2">All main categories</h2>
 					<table class="table table-sm">
 						<thead>
-							<tr><th>Category</th><th class="text-right">Transactions</th><th class="text-right">Net amount</th></tr>
+							<tr><th>Category</th><th class="text-right">Transactions</th><th class="text-right">Net amount</th><th class="text-right" title={ "Median per month, " + d.Typical.note(d.Avg) }>Typical month</th></tr>
 						</thead>
 						<tbody>
 							for _, c := range d.Categories {
@@ -90,6 +102,7 @@ templ overviewPage(d overviewData) {
 									<td><a class="link link-hover" href={ templ.SafeURL(categoryURL(c, d.From, d.To)) }>{ categoryLabel(c) }</a></td>
 									<td class="text-right tabular-nums">{ strconv.Itoa(c.Count) }</td>
 									<td class="text-right tabular-nums">@amount(c.Cents)</td>
+									<td class="text-right tabular-nums text-base-content/70">@amount(d.Typical.Categories[c.CategoryID])</td>
 								</tr>
 							}
 						</tbody>
@@ -111,13 +124,23 @@ templ overviewPage(d overviewData) {
 					<tbody>
 						for _, m := range d.Trend {
 							<tr>
-								<td><a class="link link-hover" href={ templ.SafeURL("/?month=" + m.Month) }>{ monthShort(m.Month) }</a></td>
+								<td><a class="link link-hover" href={ templ.SafeURL(d.monthURL(m.Month)) }>{ monthShort(m.Month) }</a></td>
 								<td class="text-right tabular-nums">@amount(m.IncomeCents)</td>
 								<td class="text-right tabular-nums">@amount(m.SpendingCents)</td>
 								<td class="text-right tabular-nums">@amount(m.IncomeCents + m.SpendingCents)</td>
 							</tr>
 						}
 					</tbody>
+					if d.Typical.Months > 0 {
+						<tfoot>
+							<tr>
+								<th>Median, { d.Typical.note(d.Avg) }</th>
+								<td class="text-right tabular-nums">@amount(d.Typical.Income)</td>
+								<td class="text-right tabular-nums">@amount(d.Typical.Spending)</td>
+								<td class="text-right tabular-nums">@amount(d.Typical.Net)</td>
+							</tr>
+						</tfoot>
+					}
 				</table>
 			</details>
 		</section>
@@ -129,8 +152,8 @@ templ overviewPage(d overviewData) {
 
 // incomeTile shows an income of the overview: the sum of the period, or for
 // a single month the figure of the month before, which is complete; below it
-// a monthly average.
-templ incomeTile(label string, f incomeFigures, d overviewData) {
+// the typical month.
+templ incomeTile(label string, f incomeFigures, typical int64, d overviewData) {
 	<div class="bg-base-100 rounded-box border border-base-300 p-4">
 		<div class="text-sm text-base-content/60">{ label }</div>
 		<div class="flex flex-wrap items-baseline gap-x-3">
@@ -142,7 +165,20 @@ templ incomeTile(label string, f incomeFigures, d overviewData) {
 				<span class="text-xs text-base-content/60">{ d.periodNote() }</span>
 			}
 		</div>
-		<div class="text-xs text-base-content/60 tabular-nums">⌀ { money.FormatDE(f.Average) } { d.IncomeAverageNote }</div>
+		@typicalLine(typical, d)
+	</div>
+}
+
+// typicalLine is the median per month below a figure of the overview.
+templ typicalLine(cents int64, d overviewData) {
+	<div class="text-xs text-base-content/60 tabular-nums">
+		if d.Typical.Months > 0 {
+			{ "median " }
+			@amount(cents)
+			/ month · { d.Typical.note(d.Avg) }
+		} else {
+			no earlier months for a median
+		}
 	</div>
 }
 
@@ -161,16 +197,18 @@ templ amount(cents int64) {
 	<span class={ templ.KV("text-success", cents > 0) }>{ money.FormatDE(cents) }</span>
 }
 
-// amountTile is a statTile for an amount that can be income or spending.
-templ amountTile(label string, cents int64, note string) {
+// amountTile shows an amount of the overview that can be income or
+// spending, with the typical month below it.
+templ amountTile(label string, cents int64, note string, typical int64, d overviewData) {
 	<div class="bg-base-100 rounded-box border border-base-300 p-4">
 		<div class="text-sm text-base-content/60">{ label }</div>
-		<div class="text-2xl font-semibold tabular-nums">
-			@amount(cents)
+		<div class="flex flex-wrap items-baseline gap-x-3">
+			<span class="text-2xl font-semibold tabular-nums">@amount(cents)</span>
+			if note != "" {
+				<span class="text-xs text-base-content/60">{ note }</span>
+			}
 		</div>
-		if note != "" {
-			<div class="text-xs text-base-content/60">{ note }</div>
-		}
+		@typicalLine(typical, d)
 	</div>
 }
 

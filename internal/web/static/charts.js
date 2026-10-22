@@ -29,26 +29,43 @@
   };
   const categoryAxis = { border: { display: false }, grid: { display: false } };
   // 2px surface-colored border separates neighbouring bars.
-  const bar = { borderRadius: 4, borderWidth: 2, borderColor: surface, borderSkipped: "start" };
+  const bar = { borderRadius: 4, borderWidth: 2, borderColor: surface, borderSkipped: "start", pointStyle: "rectRounded" };
+
+  // Point styles let the legend show bars as boxes and the medians as lines.
+  const legend = { position: "top", align: "start", labels: { boxWidth: 12, boxHeight: 12, usePointStyle: true } };
 
   const spending = document.getElementById("chart-spending");
   if (spending) {
+    const datasets = [{ label: "Spending", data: data.spending.values, backgroundColor: color("--series-1"), maxBarThickness: 18, ...bar }];
+    // The typical month, if there is one, as a paler bar below each category.
+    if (data.spending.typicalLabel) {
+      datasets.push({ label: data.spending.typicalLabel, data: data.spending.typical, backgroundColor: color("--series-typical"), maxBarThickness: 18, ...bar });
+    }
     new Chart(spending, {
       type: "bar",
-      data: {
-        labels: data.spending.labels,
-        datasets: [{ label: "Spending", data: data.spending.values, backgroundColor: color("--series-1"), maxBarThickness: 18, ...bar }],
-      },
+      data: { labels: data.spending.labels, datasets },
       options: {
         indexAxis: "y",
         scales: { x: valueAxis, y: categoryAxis },
+        interaction: { mode: "index", axis: "y", intersect: false },
         plugins: {
-          legend: { display: false }, // single series; the heading names it
-          tooltip: { callbacks: { label: (c) => euro.format(c.parsed.x) } },
+          legend: { ...legend, display: datasets.length > 1 }, // a single series is named by the heading
+          tooltip: { callbacks: { label: (c) => c.dataset.label + ": " + euro.format(c.parsed.x) } },
         },
       },
     });
   }
+
+  const medianLine = (c) => ({
+    borderColor: c,
+    backgroundColor: c,
+    borderWidth: 2,
+    borderDash: [6, 4],
+    pointStyle: "line",
+    pointRadius: 0,
+    pointHoverRadius: 3,
+    spanGaps: false,
+  });
 
   const trend = document.getElementById("chart-trend");
   if (trend) {
@@ -59,14 +76,20 @@
         datasets: [
           { label: "Income", data: data.trend.income, backgroundColor: color("--series-1"), maxBarThickness: 22, ...bar },
           { label: "Spending", data: data.trend.spending, backgroundColor: color("--series-2"), maxBarThickness: 22, ...bar },
+          // The medians as dashed lines over the months they are taken from.
+          { type: "line", label: "Median income", data: data.trend.typicalIncome, ...medianLine(color("--series-1-strong")) },
+          { type: "line", label: "Median spending", data: data.trend.typicalSpending, ...medianLine(color("--series-2-strong")) },
         ],
       },
       options: {
         scales: { x: categoryAxis, y: valueAxis },
         interaction: { mode: "index", intersect: false },
         plugins: {
-          legend: { position: "top", align: "start", labels: { boxWidth: 12, boxHeight: 12, useBorderRadius: true, borderRadius: 3 } },
-          tooltip: { callbacks: { label: (c) => c.dataset.label + ": " + euro.format(c.parsed.y) } },
+          legend,
+          tooltip: {
+            filter: (c) => c.parsed.y !== null,
+            callbacks: { label: (c) => c.dataset.label + ": " + euro.format(c.parsed.y) },
+          },
         },
       },
     });
