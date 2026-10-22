@@ -520,10 +520,13 @@ type chartData struct {
 
 func buildCharts(d overviewData) chartData {
 	var c chartData
+	// The label names both numbers: the months the median is taken from and,
+	// for a longer period, the months it is multiplied by.
 	if d.Typical.Months > 0 {
-		c.Spending.TypicalLabel = "Typical month (median)"
+		of := plural(d.Typical.Months, "month", "months")
+		c.Spending.TypicalLabel = "Typical month (median of " + of + ")"
 		if d.Months > 1 {
-			c.Spending.TypicalLabel = "Typical for " + strconv.Itoa(d.Months) + " months (median × " + strconv.Itoa(d.Months) + ")"
+			c.Spending.TypicalLabel = "Typical for " + strconv.Itoa(d.Months) + " months (median of " + of + " × " + strconv.Itoa(d.Months) + ")"
 		}
 	}
 	// Categories arrive most negative first, so the biggest spending is on top.

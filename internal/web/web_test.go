@@ -380,16 +380,22 @@ func TestOverviewTypicalMonth(t *testing.T) {
 		// median of 0 and is left out of it.
 		`>Wohnen</a></td><td class="text-right tabular-nums">0</td>`,
 		`<span class="">` + money.FormatDE(-10000) + `</span>`,
-		`"labels":["Wohnen","Freizeit"],"values":[0,0],"typical":[100,42]`, `"typicalLabel":"Typical month (median)"`,
+		`"labels":["Wohnen","Freizeit"],"values":[0,0],"typical":[100,42]`, `"typicalLabel":"Typical month (median of 3 months)"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("overview with avg=3 lacks %q", want)
 		}
 	}
-	// For a longer period the chart compares with the median times its months.
-	_, body = e.get("/?from=2026-09&to=2026-10&avg=3")
-	if !strings.Contains(body, `"typicalLabel":"Typical for 2 months (median × 2)"`) {
-		t.Error("the chart for two months does not compare with two typical months")
+	// For a longer period the chart compares with the median times its
+	// months; the label follows the choice of months.
+	for query, want := range map[string]string{
+		"from=2026-09&to=2026-10&avg=3":  "Typical for 2 months (median of 3 months × 2)",
+		"from=2026-09&to=2026-10":        "Typical for 2 months (median of 6 months × 2)",
+		"from=2026-09&to=2026-10&avg=12": "Typical for 2 months (median of 7 months × 2)", // not before March
+	} {
+		if _, body := e.get("/?" + query); !strings.Contains(body, `"typicalLabel":"`+want+`"`) {
+			t.Errorf("%s: the spending chart's label is not %q", query, want)
+		}
 	}
 }
 
