@@ -259,6 +259,73 @@ func TestCutoverWithFinanzguruHistory(t *testing.T) {
 	})
 }
 
+func TestRecurringFromHistory(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	withAccounts(t, st)
+	if s := mustRun(t, st, fileA, importer.Options{}); s.AutoGrouped != 0 {
+		t.Errorf("first import grouped %d without any history", s.AutoGrouped)
+	}
+
+	// Group the broadcasting fee and the bakery payments by hand.
+	group := func(name, where string) {
+		t.Helper()
+		groupID, err := st.EnsureRecurringGroup(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := st.DB.Query(`SELECT id FROM transactions WHERE ` + where)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		for _, id := range ids {
+			if err := st.SetRecurringGroup(ctx, id, groupID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	group("Rundfunk", `purpose LIKE 'Rundfunk%'`)
+	group("Baeckerei", `counterparty = 'Baeckerei Beispiel'`)
+
+	// The next export brings another fee under a new name but the same
+	// mandate, a bakery payment of a similar amount, and the rent, which is
+	// in no group.
+	newRows := strings.Join([]string{
+		`03.11.26,03.11.26,Gebucht,Max Mustermann,ARD ZDF Beitragsservice,Rundfunkbeitrag 11.2026,Ausgang,DE00999900000000000002,"-18,36",DE00ZZZ00000000001,MR-12345,`,
+		`02.11.26,02.11.26,Gebucht,Max Mustermann,Baeckerei Beispiel,VISA Debitkartenumsatz vom 01.11.2026,Ausgang,DE00999900000000000009,"-3,80",,,`,
+		`01.11.26,01.11.26,Gebucht,Max Mustermann,Hausverwaltung Beispiel,Miete 11/2026,Ausgang,DE00999900000000000003,"-1.234,56",,MIETE-1,KREF-78`,
+		"10.10.26,,Vorgemerkt",
+	}, "\n")
+	s, err := importer.Run(ctx, st, Parser{Account: "girokonto"}, variant(t, "10.10.26,,Vorgemerkt", newRows), "next.csv", importer.Options{Account: "girokonto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.New != 3 || s.AutoGrouped != 2 {
+		t.Errorf("summary = %+v, want 3 new and 2 grouped", s)
+	}
+	checks := []struct{ query, want string }{
+		{`SELECT COALESCE(g.name, '-') FROM transactions t LEFT JOIN recurring_groups g ON g.id = t.recurring_group_id WHERE t.purpose = 'Rundfunkbeitrag 11.2026'`, "Rundfunk"},
+		{`SELECT COALESCE(g.name, '-') FROM transactions t LEFT JOIN recurring_groups g ON g.id = t.recurring_group_id WHERE t.purpose LIKE '%01.11.2026'`, "Baeckerei"},
+		{`SELECT COALESCE(g.name, '-') FROM transactions t LEFT JOIN recurring_groups g ON g.id = t.recurring_group_id WHERE t.purpose = 'Miete 11/2026'`, "-"},
+		// Assigned from history, not by hand: a later choice by hand wins.
+		{`SELECT group_concat(recurring_manual) FROM transactions WHERE booking_date >= '2026-11-01'`, "0,0,0"},
+	}
+	for _, c := range checks {
+		if got := text(t, st, c.query); got != c.want {
+			t.Errorf("%s\n  got  %s\n  want %s", c.query, got, c.want)
+		}
+	}
+}
+
 func variant(t *testing.T, old, new string) *strings.Reader {
 	t.Helper()
 	content, err := os.ReadFile(fileA)
