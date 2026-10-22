@@ -7,19 +7,31 @@
 @source "../*.templ";
 @source "../static/app.js";
 
-/* Chart colors: categorical slots 1 and 2 of the data-viz palette, with a
-   separate step for the dark surface. */
+/* Chart colors, with a separate step for the dark surface. Income is the
+   green of positive amounts and spending a magenta between purple and pink.
+   The strong steps draw the median lines so they stay visible where they
+   cross a bar of their own series; the typical step is the pale comparison
+   bar of the spending chart. */
 :root {
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
+  --series-income: var(--color-success);
+  --series-spending: #c026d3;
+  --series-income-strong: #047857;
+  --series-spending-strong: #701a75;
+  --series-typical: #f0c2f5;
+  --attention: #ea580c;
+  --attention-content: #ffffff;
   --chart-ink: #52514e;
   --chart-grid: #e6e5e0;
   --chart-surface: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --series-1: #3987e5;
-    --series-2: #d95926;
+    --series-spending: #d946ef;
+    --series-income-strong: #a7f3d0;
+    --series-spending-strong: #f5d0fe;
+    --series-typical: #5b2a66;
+    --attention: #fb923c;
+    --attention-content: #1d232a;
     --chart-ink: #c3c2b7;
     --chart-grid: #34373d;
     --chart-surface: #1d232a;
@@ -31,6 +43,20 @@
    the end once that is gone. */
 html {
   overflow-anchor: none;
+}
+
+/* The overview's spending sum in the color of the spending charts, and the
+   inbox count (tile and navigation badge) in orange while there is something
+   to categorize. */
+.text-spending {
+  color: var(--series-spending);
+}
+.text-attention {
+  color: var(--attention);
+}
+.badge-attention {
+  --badge-color: var(--attention);
+  --badge-fg: var(--attention-content);
 }
 
 .chart-box {

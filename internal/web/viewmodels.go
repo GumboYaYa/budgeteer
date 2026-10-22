@@ -292,12 +292,15 @@ type overviewData struct {
 	Spending      int64 // negative
 	// ShowIncomeLast is set for a period of one month: the income boxes
 	// then show the month before, named by LastMonthNote, because the month
-	// shown may still be running. IncomeAverageNote says over which months
-	// the averages are taken.
-	ShowIncomeLast    bool
-	LastMonthNote     string
-	IncomeAverageNote string
-	Inbox             int
+	// shown may still be running.
+	ShowIncomeLast bool
+	LastMonthNote  string
+	// Avg is the number of months the typical month is taken from, chosen
+	// with AvgOptions.
+	Avg        int
+	AvgOptions []rangePreset
+	Typical    typicalMonth
+	Inbox      int
 	// Account balances at the end of BalanceDate.
 	Balances     []store.AccountBalance
 	BalanceTotal int64
@@ -307,12 +310,40 @@ type overviewData struct {
 	Chart        chartData
 }
 
-// incomeFigures are the sum of the period, the figure of the month before it
-// and a monthly average.
+// incomeFigures are the sum of the period and the figure of the month
+// before it.
 type incomeFigures struct {
-	Cents   int64
-	Last    int64
-	Average int64
+	Cents int64
+	Last  int64
+}
+
+// typicalMonth is what the overview compares with: the median of each
+// figure over the months before the newest month shown. A month without
+// transactions counts as zero; months before the oldest transaction are
+// left out, so Months can be fewer than asked for.
+type typicalMonth struct {
+	Months        int
+	From          string // YYYY-MM, the first month taken
+	Label         string // "Mar – Aug 2026"
+	Income        int64
+	RegularIncome int64
+	Spending      int64
+	Net           int64 // median of the monthly nets
+	// Categories holds the median net amount per main category; 0 stands
+	// for transactions without a category.
+	Categories map[int64]int64
+}
+
+// note names the months the typical month is taken from.
+func (t typicalMonth) note(asked int) string {
+	switch {
+	case t.Months == 0:
+		return "no earlier months"
+	case t.Months < asked:
+		return t.Label + " (only " + plural(t.Months, "month", "months") + ")"
+	default:
+		return t.Label
+	}
 }
 
 // rangePreset is a shortcut to a period of the overview.
@@ -356,12 +387,53 @@ func rangeLabel(from, to time.Time) string {
 	}
 }
 
-// rangeURL links to the overview of a period.
-func rangeURL(from, to time.Time) string {
-	if from.Equal(to) {
-		return "/?month=" + to.Format(monthLayout)
+// rangeLabelShort is rangeLabel with abbreviated months: "Jul – Sep 2026".
+func rangeLabelShort(from, to time.Time) string {
+	switch {
+	case from.Equal(to):
+		return to.Format("Jan 2006")
+	case from.Year() == to.Year():
+		return from.Format("Jan") + " – " + to.Format("Jan 2006")
+	default:
+		return from.Format("Jan 2006") + " – " + to.Format("Jan 2006")
 	}
-	return "/?from=" + from.Format(monthLayout) + "&to=" + to.Format(monthLayout)
+}
+
+// rangeURL links to the overview of a period, with the typical month taken
+// from avg months; the default is left out.
+func rangeURL(from, to time.Time, avg int) string {
+	u := "/?from=" + from.Format(monthLayout) + "&to=" + to.Format(monthLayout)
+	if from.Equal(to) {
+		u = "/?month=" + to.Format(monthLayout)
+	}
+	if avg != defaultAvgMonths {
+		u += "&avg=" + strconv.Itoa(avg)
+	}
+	return u
+}
+
+// monthURL links to the overview of one month, keeping the choice of Avg.
+func (d overviewData) monthURL(month string) string {
+	m, err := time.Parse(monthLayout, month)
+	if err != nil {
+		return "/"
+	}
+	return rangeURL(m, m, d.Avg)
+}
+
+// median returns the middle value, for an even number the mean of the two
+// middle ones, and 0 for none.
+func median(xs []int64) int64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	s := slices.Clone(xs)
+	slices.Sort(s)
+	n := len(s)
+	if n%2 == 1 {
+		return s[n/2]
+	}
+	return roundDiv(s[n/2-1]+s[n/2], 2)
 }
 
 // roundDiv divides rounding to the nearest; b must be positive.
@@ -425,31 +497,61 @@ func (d reserveData) targetNote() string {
 
 // chartData is handed to the browser as JSON. Values are euros and for
 // drawing only; all figures shown as text come from integer cents.
+//
+// The spending chart compares each category with its typical spending for a
+// period of the same length: the median per month times the months shown.
+// The trend chart draws the medians as lines over the months they are taken
+// from; its other months are null.
 type chartData struct {
 	Spending struct {
-		Labels []string  `json:"labels"`
-		Values []float64 `json:"values"`
+		Labels       []string  `json:"labels"`
+		Values       []float64 `json:"values"`
+		Typical      []float64 `json:"typical"`
+		TypicalLabel string    `json:"typicalLabel"`
 	} `json:"spending"`
 	Trend struct {
-		Labels   []string  `json:"labels"`
-		Income   []float64 `json:"income"`
-		Spending []float64 `json:"spending"`
+		Labels          []string   `json:"labels"`
+		Income          []float64  `json:"income"`
+		Spending        []float64  `json:"spending"`
+		TypicalIncome   []*float64 `json:"typicalIncome"`
+		TypicalSpending []*float64 `json:"typicalSpending"`
 	} `json:"trend"`
 }
 
 func buildCharts(d overviewData) chartData {
 	var c chartData
-	// Categories arrive most negative first, so the biggest spending is on top.
-	for _, cat := range d.Categories {
-		if cat.Cents < 0 {
-			c.Spending.Labels = append(c.Spending.Labels, categoryLabel(cat))
-			c.Spending.Values = append(c.Spending.Values, float64(-cat.Cents)/100)
+	// The label names both numbers: the months the median is taken from and,
+	// for a longer period, the months it is multiplied by.
+	if d.Typical.Months > 0 {
+		of := plural(d.Typical.Months, "month", "months")
+		c.Spending.TypicalLabel = "Typical month (median of " + of + ")"
+		if d.Months > 1 {
+			c.Spending.TypicalLabel = "Typical for " + strconv.Itoa(d.Months) + " months (median of " + of + " × " + strconv.Itoa(d.Months) + ")"
 		}
 	}
+	// Categories arrive most negative first, so the biggest spending is on top.
+	for _, cat := range d.Categories {
+		typical := min(d.Typical.Categories[cat.CategoryID], 0) * int64(d.Months)
+		if cat.Cents < 0 || typical < 0 {
+			c.Spending.Labels = append(c.Spending.Labels, categoryLabel(cat))
+			c.Spending.Values = append(c.Spending.Values, float64(-min(cat.Cents, 0))/100)
+			c.Spending.Typical = append(c.Spending.Typical, float64(-typical)/100)
+		}
+	}
+	typicalIncome := float64(d.Typical.Income) / 100
+	typicalSpending := float64(-d.Typical.Spending) / 100
 	for _, m := range d.Trend {
 		c.Trend.Labels = append(c.Trend.Labels, monthShort(m.Month))
 		c.Trend.Income = append(c.Trend.Income, float64(m.IncomeCents)/100)
 		c.Trend.Spending = append(c.Trend.Spending, float64(-m.SpendingCents)/100)
+		inWindow := d.Typical.Months > 0 && m.Month >= d.Typical.From && m.Month < d.ToMonth
+		if inWindow {
+			c.Trend.TypicalIncome = append(c.Trend.TypicalIncome, &typicalIncome)
+			c.Trend.TypicalSpending = append(c.Trend.TypicalSpending, &typicalSpending)
+		} else {
+			c.Trend.TypicalIncome = append(c.Trend.TypicalIncome, nil)
+			c.Trend.TypicalSpending = append(c.Trend.TypicalSpending, nil)
+		}
 	}
 	return c
 }
@@ -477,6 +579,15 @@ func monthShort(month string) string {
 		return month
 	}
 	return t.Format("Jan 06")
+}
+
+// monthLong renders YYYY-MM as "September 2026".
+func monthLong(month string) string {
+	t, err := time.Parse(monthLayout, month)
+	if err != nil {
+		return month
+	}
+	return t.Format("January 2006")
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }

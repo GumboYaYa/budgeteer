@@ -173,11 +173,11 @@ func TestOverview(t *testing.T) {
 		t.Error("overview shows the transfer category")
 	}
 	// One month: the income of the month before, which is complete, and
-	// below it the average of that month and the five before (nothing before
-	// September). The net figure stays this month's.
+	// below it the median of the months before; there are none before
+	// September. The net figure stays this month's.
 	for _, want := range []string{
 		`<span class="">` + money.FormatDE(0), "last month, August 2026",
-		"⌀ " + money.FormatDE(0) + " last 6 months", "income minus spending, this month",
+		"no earlier months for a median", "income minus spending, this month",
 		`name="from" value="2026-09"`, `name="to" value="2026-09"`,
 		`href="/?month=2026-08" aria-label="Earlier`, `href="/?month=2026-10" aria-label="Later`,
 	} {
@@ -188,10 +188,10 @@ func TestOverview(t *testing.T) {
 	_, october := e.get("/?month=2026-10")
 	for _, want := range []string{
 		`<span class="text-success">` + money.FormatDE(250000), "last month, September 2026",
-		"⌀ " + money.FormatDE(41667) + " last 6 months",
+		`median <span class="text-success">` + money.FormatDE(250000) + `</span> / month · Sep 2026 (only 1 month)`,
 	} {
 		if !strings.Contains(october, want) {
-			t.Errorf("October should show September's income and its average over six months, lacks %q", want)
+			t.Errorf("October should show September's income and its median, lacks %q", want)
 		}
 	}
 	// Regular income is the income that belongs to a recurring group: none
@@ -214,9 +214,9 @@ func TestOverview(t *testing.T) {
 		"/?month=2026-09": {`<span class="">` + money.FormatDE(0), "last month, August 2026"},
 		"/?month=2026-10": {
 			`<span class="text-success">` + money.FormatDE(250000), "last month, September 2026",
-			"⌀ " + money.FormatDE(41667) + " last 6 months",
+			`median <span class="text-success">` + money.FormatDE(250000),
 		},
-		"/?from=2026-08&to=2026-10": {`<span class="text-success">` + money.FormatDE(250000), "⌀ " + money.FormatDE(83333) + " per month"},
+		"/?from=2026-08&to=2026-10": {`<span class="text-success">` + money.FormatDE(250000), `median <span class="text-success">` + money.FormatDE(250000)},
 	} {
 		tile := regular(path)
 		for _, want := range wants {
@@ -235,7 +235,9 @@ func TestOverviewPeriod(t *testing.T) {
 	e := newEnv(t, true)
 	active := func(body string) string {
 		t.Helper()
-		_, rest, found := strings.Cut(body, "btn-neutral\" href=\"/?")
+		_, shortcuts, _ := strings.Cut(body, `aria-label="Period shortcuts"`)
+		shortcuts, _, _ = strings.Cut(shortcuts, "</div>")
+		_, rest, found := strings.Cut(shortcuts, "btn-neutral\" href=\"/?")
 		if !found {
 			return ""
 		}
@@ -251,9 +253,9 @@ func TestOverviewPeriod(t *testing.T) {
 		trendN int // months in the chart
 	}{
 		{query: "", label: "September 2026", preset: "Month", trendN: 12},
-		// The sums are September's; the average is per month of the period.
+		// The sums are September's; there is nothing before it for a median.
 		{query: "from=2026-07&to=2026-09", label: "July – September 2026", preset: "3 months", trendN: 12,
-			wants: []string{money.FormatDE(250000), "⌀ " + money.FormatDE(83333) + " per month", "in these 3 months", money.FormatDE(-132136),
+			wants: []string{money.FormatDE(250000), "no earlier months for a median", "in these 3 months", money.FormatDE(-132136),
 				`href="/?from=2026-04&amp;to=2026-06"`, `href="/?from=2026-10&amp;to=2026-12"`, "from=2026-07-01&amp;to=2026-09-30"}},
 		{query: "from=2025-10&to=2026-09", label: "October 2025 – September 2026", preset: "12 months", trendN: 12},
 		{query: "from=2026-01&to=2026-09", label: "January – September 2026", preset: "2026", trendN: 12},
@@ -309,6 +311,94 @@ func TestOverviewPeriod(t *testing.T) {
 
 // The inbox suggests the category of earlier transactions of the same
 // counterparty; the list marks categories that were applied automatically.
+func TestOverviewTypicalMonth(t *testing.T) {
+	e := newEnv(t, true)
+	// Earlier months next to September's spending of 1321.36: a small one,
+	// a car repair of 5000.00 and one in March.
+	for i, x := range []struct {
+		date     string
+		cents    int64
+		category string
+	}{
+		{"2026-03-10", -20000, "freizeit"},
+		{"2026-07-10", -10000, "wohnen"},
+		{"2026-08-10", -500000, "freizeit"},
+	} {
+		res, err := e.st.DB.Exec(`
+			INSERT INTO transactions (account_id, raw_record_id, source, dedup_key, booking_date, amount_cents)
+			SELECT account_id, raw_record_id, 'test', ?, ?, ? FROM transactions WHERE external_id = 'fg-0002'`,
+			"typical-"+strconv.Itoa(i), x.date, x.cents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		if _, err := e.st.DB.Exec(`INSERT INTO allocations (transaction_id, category_id, amount_cents, source) VALUES (?, ?, ?, 'manual')`,
+			id, e.categoryID(x.category), x.cents); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spendingTile := func(body string) string {
+		_, tile, _ := strings.Cut(body, `<div class="text-sm text-base-content/60">Spending</div>`)
+		tile, _, _ = strings.Cut(tile, `<div class="text-sm text-base-content/60">Net</div>`)
+		return tile
+	}
+	tests := []struct {
+		query string
+		wants []string
+	}{
+		// July to September: the car repair does not move the median.
+		{"month=2026-10&avg=3", []string{"median <span class=\"\">" + money.FormatDE(-132136) + "</span> / month · Jul – Sep 2026"}},
+		// April to September, three months without spending among them.
+		{"month=2026-10", []string{"median <span class=\"\">" + money.FormatDE(-5000) + "</span> / month · Apr – Sep 2026"}},
+		// Not before March, the oldest month.
+		{"month=2026-10&avg=12", []string{"median <span class=\"\">" + money.FormatDE(-10000) + "</span> / month · Mar – Sep 2026 (only 7 months)"}},
+		// Anything else is the default.
+		{"month=2026-10&avg=5", []string{"Apr – Sep 2026"}},
+	}
+	for _, tt := range tests {
+		_, body := e.get("/?" + tt.query)
+		for _, want := range tt.wants {
+			if tile := spendingTile(body); !strings.Contains(tile, want) {
+				t.Errorf("%s: spending tile lacks %q:\n%s", tt.query, want, tile)
+			}
+		}
+	}
+
+	_, body := e.get("/?month=2026-10&avg=3")
+	// The choice is kept by the shortcuts, Prev and Next, the month form and
+	// the months of the table.
+	for _, want := range []string{
+		`href="/?month=2026-09&amp;avg=3" aria-label="Earlier`, `href="/?month=2026-11&amp;avg=3" aria-label="Later`,
+		`href="/?from=2026-07&amp;to=2026-09&amp;avg=3"`, `<input type="hidden" name="avg" value="3">`,
+		`href="/?month=2026-07&amp;avg=3">Jul 26</a>`,
+		`btn-neutral" href="/?month=2026-10&amp;avg=3" aria-current aria-label="3 months"`,
+		// The medians of the table's footer.
+		"Median, Jul – Sep 2026",
+		// October has no transactions; the typical categories are listed
+		// anyway, with Wohnen's median of -100.00 (July), and the chart
+		// compares with them; Essen & Trinken, only in September, has a
+		// median of 0 and is left out of it.
+		`>Wohnen</a></td><td class="text-right tabular-nums">0</td>`,
+		`<span class="">` + money.FormatDE(-10000) + `</span>`,
+		`"labels":["Wohnen","Freizeit"],"values":[0,0],"typical":[100,42]`, `"typicalLabel":"Typical month (median of 3 months)"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("overview with avg=3 lacks %q", want)
+		}
+	}
+	// For a longer period the chart compares with the median times its
+	// months; the label follows the choice of months.
+	for query, want := range map[string]string{
+		"from=2026-09&to=2026-10&avg=3":  "Typical for 2 months (median of 3 months × 2)",
+		"from=2026-09&to=2026-10":        "Typical for 2 months (median of 6 months × 2)",
+		"from=2026-09&to=2026-10&avg=12": "Typical for 2 months (median of 7 months × 2)", // not before March
+	} {
+		if _, body := e.get("/?" + query); !strings.Contains(body, `"typicalLabel":"`+want+`"`) {
+			t.Errorf("%s: the spending chart's label is not %q", query, want)
+		}
+	}
+}
+
 func TestInboxSuggestsAndListMarksAutomatic(t *testing.T) {
 	e := newEnv(t, true)
 	if _, body := e.get("/inbox"); !strings.Contains(body, `data-suggest=""`) {
@@ -1167,5 +1257,25 @@ func TestImportUploadDKB(t *testing.T) {
 	}
 	if status, _ := upload(e, file, map[string]string{"source": "xls"}); status != http.StatusBadRequest {
 		t.Errorf("unknown source: status %d, want 400", status)
+	}
+}
+
+func TestMedian(t *testing.T) {
+	tests := []struct {
+		xs   []int64
+		want int64
+	}{
+		{nil, 0},
+		{[]int64{-500}, -500},
+		{[]int64{-100, -300, -200}, -200},
+		// One spike does not move it; an even count takes the mean of the
+		// middle two, rounded.
+		{[]int64{-100, -500000, -201, -300}, -251},
+		{[]int64{0, 0, 3, 0}, 0},
+	}
+	for _, tt := range tests {
+		if got := median(tt.xs); got != tt.want {
+			t.Errorf("median(%v) = %d, want %d", tt.xs, got, tt.want)
+		}
 	}
 }

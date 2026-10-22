@@ -90,8 +90,8 @@
     const badge = document.getElementById("inbox-count");
     if (n === null || !badge) return;
     badge.textContent = n;
-    badge.classList.toggle("badge-primary", n !== "0");
-    badge.classList.toggle("badge-ghost", n === "0");
+    badge.classList.toggle("badge-attention", n !== "0");
+    badge.classList.toggle("badge-success", n === "0");
     const total = document.getElementById("inbox-total");
     if (total) total.textContent = n;
   }

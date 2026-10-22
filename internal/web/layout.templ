@@ -21,7 +21,7 @@ templ layout(title, active string, inbox int) {
 					@navLink("/", "Overview", active == "overview")
 					<a href="/inbox" class={ "btn btn-sm", templ.KV("btn-neutral", active == "inbox"), templ.KV("btn-ghost", active != "inbox") }>
 						Inbox
-						<span id="inbox-count" class={ "badge badge-sm", templ.KV("badge-primary", inbox > 0), templ.KV("badge-ghost", inbox == 0) }>{ strconv.Itoa(inbox) }</span>
+						<span id="inbox-count" class={ "badge badge-sm", templ.KV("badge-attention", inbox > 0), templ.KV("badge-success", inbox == 0) }>{ strconv.Itoa(inbox) }</span>
 					</a>
 					@navLink("/transactions", "Transactions", active == "transactions")
 					@navLink("/recurring", "Recurring", active == "recurring")
