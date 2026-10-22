@@ -511,6 +511,60 @@ func (s *Store) AssignContractGroup(ctx context.Context, transactionID, groupID 
 	return nil
 }
 
+// GroupExample is what a transaction's recurring group is predicted from.
+// GroupID is 0 for a transaction in no group; Manual is set when its group,
+// or "no group", was chosen by hand.
+type GroupExample struct {
+	TxID         int64
+	BookingDate  string
+	AmountCents  int64
+	Counterparty string
+	CreditorID   string
+	MandateRef   string
+	GroupID      int64
+	Manual       bool
+}
+
+// GroupExamples returns all transactions except transfers, oldest first,
+// whether they are in a group or not.
+func (s *Store) GroupExamples(ctx context.Context) ([]GroupExample, error) {
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT id, booking_date, amount_cents, COALESCE(counterparty, ''), COALESCE(creditor_id, ''),
+		       COALESCE(mandate_ref, ''), COALESCE(recurring_group_id, 0), recurring_manual
+		FROM transactions
+		WHERE is_transfer = 0
+		ORDER BY booking_date, id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: load group examples: %w", err)
+	}
+	defer rows.Close()
+
+	var examples []GroupExample
+	for rows.Next() {
+		var e GroupExample
+		err := rows.Scan(&e.TxID, &e.BookingDate, &e.AmountCents, &e.Counterparty, &e.CreditorID,
+			&e.MandateRef, &e.GroupID, &e.Manual)
+		if err != nil {
+			return nil, fmt.Errorf("store: load group examples: %w", err)
+		}
+		examples = append(examples, e)
+	}
+	return examples, rows.Err()
+}
+
+// SetAutoRecurringGroup puts a transaction into the group its history points
+// to. A transaction that is in a group already, or whose group was chosen by
+// hand, keeps it.
+func (s *Store) SetAutoRecurringGroup(ctx context.Context, transactionID, groupID int64) error {
+	_, err := s.q.ExecContext(ctx, `
+		UPDATE transactions SET recurring_group_id = ?
+		WHERE id = ? AND recurring_group_id IS NULL AND recurring_manual = 0`, groupID, transactionID)
+	if err != nil {
+		return fmt.Errorf("store: set automatic recurring group: %w", err)
+	}
+	return nil
+}
+
 // found turns "no row changed" into ErrNotFound.
 func found(res sql.Result) error {
 	if n, err := res.RowsAffected(); err == nil && n == 0 {

@@ -45,6 +45,7 @@ type cli struct {
 		DKB        importDKBCmd        `cmd:"" name:"dkb" help:"Import a DKB account export (CSV). Exports may overlap; only new transactions are added."`
 	} `cmd:"" help:"Import transactions from a file."`
 	Categorize categorizeCmd `cmd:"" help:"Categorize the transactions of the inbox whose counterparty always had the same category. Imports do this on their own."`
+	Group      groupCmd      `cmd:"" help:"Put transactions in no recurring group into the group of their earlier counterparts (same mandate, or same counterparty with a similar amount). Imports do this on their own for the transactions they add."`
 	Reserve    reserveCmd    `cmd:"" help:"Show the monthly amount to set aside for expenses that come once or twice a year."`
 	Export     exportCmd     `cmd:"" help:"Write all data as CSV or Parquet files."`
 	Backup     backupCmd     `cmd:"" help:"Write a consistent copy of the database."`
@@ -292,6 +293,52 @@ func (c categorizeCmd) Run(ctx context.Context, st *store.Store) error {
 	return nil
 }
 
+type groupCmd struct {
+	From   string `placeholder:"YYYY-MM-DD" help:"Only transactions booked on or after this date."`
+	DryRun bool   `help:"Only report what would be grouped."`
+}
+
+func (c groupCmd) Run(ctx context.Context, st *store.Store) error {
+	if c.From != "" {
+		if _, err := time.Parse(time.DateOnly, c.From); err != nil {
+			return fmt.Errorf("--from %q: want a date like 2026-10-01", c.From)
+		}
+	}
+	var assigned []categorize.GroupAssignment
+	err := st.InTx(ctx, func(tx *store.Store) (err error) {
+		assigned, err = categorize.AssignGroups(ctx, tx, categorize.GroupScope{From: c.From}, c.DryRun)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	groups, err := st.ListRecurringGroups(ctx)
+	if err != nil {
+		return err
+	}
+	names := make(map[int64]string, len(groups))
+	for _, g := range groups {
+		names[g.ID] = g.Name
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, a := range assigned {
+		t, err := st.TransactionByID(ctx, a.TxID)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\tby %s\t→ %s\n", t.BookingDate, money.FormatDE(t.AmountCents), t.Counterparty, a.Basis, names[a.GroupID])
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if c.DryRun {
+		fmt.Printf("would be grouped:  %d\n", len(assigned))
+	} else {
+		fmt.Printf("grouped:           %d\n", len(assigned))
+	}
+	return nil
+}
+
 type exportCmd struct {
 	Format string `enum:"csv,parquet" default:"csv" help:"File format: csv or parquet."`
 	Out    string `type:"path" placeholder:"DIR" help:"Directory to write to. Default: export/ next to the database."`
@@ -344,6 +391,9 @@ func printSummary(s importer.Summary) {
 	fmt.Printf("categories refreshed:  %d\n", s.Updated)
 	if s.AutoCategorized > 0 {
 		fmt.Printf("categorized by history: %d\n", s.AutoCategorized)
+	}
+	if s.AutoGrouped > 0 {
+		fmt.Printf("grouped by history:    %d\n", s.AutoGrouped)
 	}
 	if s.FieldsUpdated > 0 {
 		fmt.Printf("details overwritten:   %d\n", s.FieldsUpdated)

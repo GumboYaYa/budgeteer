@@ -478,6 +478,85 @@ func TestRecurringReview(t *testing.T) {
 	}
 }
 
+func TestAutoRecurringGroup(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	account, err := s.CreateAccount(ctx, Account{Slug: "giro", Name: "Giro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`
+		INSERT INTO imports (id, source, file_name, file_sha256, row_count) VALUES (1, 'test', 'test.csv', 'x', 1);
+		INSERT INTO raw_records (id, import_id, line_no, data) VALUES (1, 1, 1, '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	streaming, err := s.EnsureRecurringGroup(ctx, "Streaming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.EnsureRecurringGroup(ctx, "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert := func(key string, transfer bool) int64 {
+		t.Helper()
+		id, err := s.InsertTransaction(ctx, Transaction{
+			AccountID: account.ID, RawRecordID: 1, Source: "test", DedupKey: key, BookingDate: "2026-09-01",
+			AmountCents: -999, Counterparty: "Streamingdienst", CreditorID: "DE00ZZZ00000000001", MandateRef: "M-1",
+			IsTransfer: transfer,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	open := insert("open", false)
+	noGroup := insert("no-group", false)
+	grouped := insert("grouped", false)
+	transfer := insert("transfer", true)
+	if err := s.SetRecurringGroup(ctx, noGroup, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRecurringGroup(ctx, grouped, other); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{open, noGroup, grouped} {
+		if err := s.SetAutoRecurringGroup(ctx, id, streaming); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	examples, err := s.GroupExamples(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[int64]GroupExample)
+	for _, e := range examples {
+		got[e.TxID] = e
+	}
+	want := map[int64]GroupExample{
+		open:    {GroupID: streaming},
+		noGroup: {GroupID: 0, Manual: true},
+		grouped: {GroupID: other, Manual: true},
+	}
+	if len(got) != len(want) {
+		t.Errorf("GroupExamples returned %d transactions, want %d (transfers left out)", len(got), len(want))
+	}
+	if _, ok := got[transfer]; ok {
+		t.Error("a transfer is among the group examples")
+	}
+	for id, w := range want {
+		e := got[id]
+		if e.GroupID != w.GroupID || e.Manual != w.Manual {
+			t.Errorf("transaction %d: group %d, manual %v; want %d, %v", id, e.GroupID, e.Manual, w.GroupID, w.Manual)
+		}
+		if e.Counterparty != "Streamingdienst" || e.CreditorID != "DE00ZZZ00000000001" || e.MandateRef != "M-1" ||
+			e.AmountCents != -999 || e.BookingDate != "2026-09-01" {
+			t.Errorf("transaction %d: fields %+v", id, e)
+		}
+	}
+}
+
 func TestRecurringCosts(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

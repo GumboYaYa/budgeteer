@@ -134,6 +134,7 @@ type Summary struct {
 	CategoriesCreated int
 	GroupsCreated     int // recurring groups created from contracts of the source
 	AutoCategorized   int // inbox transactions categorized from history
+	AutoGrouped       int // new transactions put into a recurring group from history
 }
 
 // Run imports one file. It is idempotent: the identical file is recognised by
@@ -219,6 +220,7 @@ type run struct {
 	contracts  map[string]int64         // by contract id: recurring group, 0 if its group was deleted
 	balances   map[int64]balance        // by account id: newest stated balance among imported days
 	ownIBANs   map[string]int64         // IBAN → account id, for transfer detection
+	newIDs     []int64                  // transactions inserted by this import
 	// fixed is the account of Options.Account; fileBalance its balance as
 	// stated by the file.
 	fixed       *store.Account
@@ -361,6 +363,7 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			return fmt.Errorf("line %d: %w", c.Row.LineNo, err)
 		}
 		known[t.DedupKey] = t.ID
+		r.newIDs = append(r.newIDs, t.ID)
 		r.summary.New++
 
 		if categoryID != 0 {
@@ -402,6 +405,14 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 		return err
 	}
 	r.summary.AutoCategorized = auto.Applied
+
+	if len(r.newIDs) > 0 {
+		grouped, err := categorize.AssignGroups(ctx, r.tx, categorize.GroupScope{TxIDs: r.newIDs}, false)
+		if err != nil {
+			return err
+		}
+		r.summary.AutoGrouped = len(grouped)
+	}
 	return nil
 }
 
