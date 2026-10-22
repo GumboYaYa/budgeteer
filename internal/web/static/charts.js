@@ -8,7 +8,16 @@
   const data = JSON.parse(dataEl.textContent);
 
   const css = getComputedStyle(document.documentElement);
-  const color = (name) => css.getPropertyValue(name).trim();
+  // Tokens can hold any CSS color, such as daisyUI's oklch; Chart.js only
+  // understands hex and rgb, so the browser converts each by painting it.
+  const pixel = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  const color = (name) => {
+    pixel.clearRect(0, 0, 1, 1);
+    pixel.fillStyle = css.getPropertyValue(name).trim();
+    pixel.fillRect(0, 0, 1, 1);
+    const [r, g, b] = pixel.getImageData(0, 0, 1, 1).data;
+    return `rgb(${r}, ${g}, ${b})`;
+  };
   const ink = color("--chart-ink");
   const grid = color("--chart-grid");
   const surface = color("--chart-surface");
@@ -36,7 +45,7 @@
 
   const spending = document.getElementById("chart-spending");
   if (spending) {
-    const datasets = [{ label: "Spending", data: data.spending.values, backgroundColor: color("--series-1"), maxBarThickness: 18, ...bar }];
+    const datasets = [{ label: "Spending", data: data.spending.values, backgroundColor: color("--series-spending"), maxBarThickness: 18, ...bar }];
     // The typical month, if there is one, as a paler bar below each category.
     if (data.spending.typicalLabel) {
       datasets.push({ label: data.spending.typicalLabel, data: data.spending.typical, backgroundColor: color("--series-typical"), maxBarThickness: 18, ...bar });
@@ -74,11 +83,11 @@
       data: {
         labels: data.trend.labels,
         datasets: [
-          { label: "Income", data: data.trend.income, backgroundColor: color("--series-1"), maxBarThickness: 22, ...bar },
-          { label: "Spending", data: data.trend.spending, backgroundColor: color("--series-2"), maxBarThickness: 22, ...bar },
+          { label: "Income", data: data.trend.income, backgroundColor: color("--series-income"), maxBarThickness: 22, ...bar },
+          { label: "Spending", data: data.trend.spending, backgroundColor: color("--series-spending"), maxBarThickness: 22, ...bar },
           // The medians as dashed lines over the months they are taken from.
-          { type: "line", label: "Median income", data: data.trend.typicalIncome, ...medianLine(color("--series-1-strong")) },
-          { type: "line", label: "Median spending", data: data.trend.typicalSpending, ...medianLine(color("--series-2-strong")) },
+          { type: "line", label: "Median income", data: data.trend.typicalIncome, ...medianLine(color("--series-income-strong")) },
+          { type: "line", label: "Median spending", data: data.trend.typicalSpending, ...medianLine(color("--series-spending-strong")) },
         ],
       },
       options: {

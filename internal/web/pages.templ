@@ -41,11 +41,11 @@ templ overviewPage(d overviewData) {
 		<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
 			@incomeTile("Total Income", d.Income, d.Typical.Income, d)
 			@incomeTile("Regular income", d.RegularIncome, d.Typical.RegularIncome, d)
-			@amountTile("Spending", d.Spending, d.periodNote(), d.Typical.Spending, d)
+			@spendingTile(d)
 			@amountTile("Net", d.Income.Cents+d.Spending, d.netNote(), d.Typical.Net, d)
 			<a href="/inbox" class="bg-base-100 rounded-box border border-base-300 p-4 hover:border-primary">
 				<div class="text-sm text-base-content/60">Inbox</div>
-				<div class="text-2xl font-semibold tabular-nums">{ strconv.Itoa(d.Inbox) }</div>
+				<div class={ "text-2xl font-semibold tabular-nums", templ.KV("text-success", d.Inbox == 0), templ.KV("text-attention", d.Inbox > 0) }>{ strconv.Itoa(d.Inbox) }</div>
 				<div class="text-xs text-base-content/60">uncategorized in total</div>
 			</a>
 		</div>
@@ -166,6 +166,19 @@ templ incomeTile(label string, f incomeFigures, typical int64, d overviewData) {
 			}
 		</div>
 		@typicalLine(typical, d)
+	</div>
+}
+
+// spendingTile shows the spending of the period in the color of the
+// spending charts, with the typical month below it.
+templ spendingTile(d overviewData) {
+	<div class="bg-base-100 rounded-box border border-base-300 p-4">
+		<div class="text-sm text-base-content/60">Spending</div>
+		<div class="flex flex-wrap items-baseline gap-x-3">
+			<span class="text-2xl font-semibold tabular-nums text-spending">{ money.FormatDE(d.Spending) }</span>
+			<span class="text-xs text-base-content/60">{ d.periodNote() }</span>
+		</div>
+		@typicalLine(d.Typical.Spending, d)
 	</div>
 }
 
