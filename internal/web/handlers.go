@@ -2,6 +2,7 @@ package web
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GumboYaYa/budgeteer/internal/categorize"
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
 	"github.com/GumboYaYa/budgeteer/internal/importer/finanzguru"
@@ -185,6 +187,10 @@ func (s *server) inbox(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if err := s.addSuggestions(ctx, page.Rows); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	picker, err := s.pickerCategories(r)
 	if err != nil {
 		s.fail(w, r, err)
@@ -280,6 +286,35 @@ func (s *server) transactions(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, listPage(d))
 }
 
+// addSuggestions fills in the category that history suggests for the
+// uncategorized ones among rows.
+func (s *server) addSuggestions(ctx context.Context, rows []store.TxView) error {
+	ids := make([]int64, 0, len(rows))
+	for _, v := range rows {
+		if v.CategoryID == 0 && !v.IsTransfer {
+			ids = append(ids, v.ID)
+		}
+	}
+	suggestions, err := categorize.Suggest(ctx, s.st, ids)
+	if err != nil || len(suggestions) == 0 {
+		return err
+	}
+	categories, err := s.st.ListCategories(ctx)
+	if err != nil {
+		return err
+	}
+	names := make(map[int64]string, len(categories))
+	for _, c := range categories {
+		names[c.ID] = c.FullName()
+	}
+	for i, v := range rows {
+		if p, ok := suggestions[v.ID]; ok {
+			rows[i].SuggestedID, rows[i].SuggestedName = p.CategoryID, names[p.CategoryID]
+		}
+	}
+	return nil
+}
+
 // pickerCategories returns all categories for the picker, the most recently
 // used ones first.
 func (s *server) pickerCategories(r *http.Request) ([]pickerItem, error) {
@@ -341,6 +376,12 @@ func (s *server) renderRows(w http.ResponseWriter, r *http.Request, txIDs []int6
 			return
 		}
 		rows = append(rows, v)
+	}
+	if !withCategory {
+		if err := s.addSuggestions(r.Context(), rows); err != nil {
+			s.fail(w, r, err)
+			return
+		}
 	}
 	s.render(w, r, txRows(rows, withCategory))
 }

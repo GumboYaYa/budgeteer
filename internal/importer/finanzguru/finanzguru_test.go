@@ -215,6 +215,29 @@ func TestNewerFullExport(t *testing.T) {
 	}
 }
 
+// A category applied automatically gives way to the one Finanzguru states.
+func TestNewerExportReplacesAutomaticCategory(t *testing.T) {
+	st := newStore(t)
+	mustRun(t, st, sampleV1, importer.Options{})
+
+	id := count(t, st, `SELECT id FROM transactions WHERE external_id = 'fg-0007'`)
+	category := count(t, st, `SELECT id FROM categories WHERE slug = 'wohnen/miete'`)
+	if err := st.SetAutoCategory(context.Background(), int64(id), int64(category), "history:name"); err != nil {
+		t.Fatal(err)
+	}
+	if got := text(t, st, categoryOfID("fg-0007")); got != "wohnen/miete (rule)" {
+		t.Fatalf("before the second import: %s", got)
+	}
+
+	mustRun(t, st, sampleV2, importer.Options{})
+	if got := text(t, st, categoryOfID("fg-0007")); got != "shopping/sonstiges (finanzguru)" {
+		t.Errorf("after the second import: %s", got)
+	}
+	if n := count(t, st, `SELECT count(*) FROM allocations WHERE rule_id IS NOT NULL`); n != 0 {
+		t.Errorf("%d allocations still have a rule id", n)
+	}
+}
+
 func TestCutover(t *testing.T) {
 	st := newStore(t)
 	s := mustRun(t, st, sampleV1, importer.Options{Cutover: "2026-09-05"})

@@ -281,6 +281,9 @@ templ importResult(s importer.Summary, problem string) {
 					@summaryRow("New transactions", s.New)
 					@summaryRow("Already imported", s.Duplicates)
 					@summaryRow("Categories refreshed", s.Updated)
+					if s.AutoCategorized > 0 {
+						@summaryRow("Categorized from earlier transactions", s.AutoCategorized)
+					}
 					if s.FieldsUpdated > 0 {
 						@summaryRow("Details overwritten", s.FieldsUpdated)
 					}

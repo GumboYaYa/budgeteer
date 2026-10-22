@@ -14,6 +14,9 @@ import (
 const (
 	SourceFinanzguru = "finanzguru"
 	SourceManual     = "manual"
+	// SourceRule marks a category applied automatically from history; the
+	// allocation's rule id says on what basis.
+	SourceRule = "rule"
 )
 
 // Allocation assigns a transaction to a category. There is exactly one per
@@ -24,6 +27,7 @@ type Allocation struct {
 	CategoryID    int64
 	AmountCents   int64
 	Source        string
+	RuleID        string // only for SourceRule
 }
 
 // EnsureCategory returns the id of the category with the given slug, creating
@@ -74,19 +78,20 @@ func (s *Store) Allocations(ctx context.Context, transactionID int64) ([]Allocat
 
 func (s *Store) InsertAllocation(ctx context.Context, a Allocation) error {
 	_, err := s.q.ExecContext(ctx,
-		`INSERT INTO allocations (transaction_id, category_id, amount_cents, source) VALUES (?, ?, ?, ?)`,
-		a.TransactionID, a.CategoryID, a.AmountCents, a.Source)
+		`INSERT INTO allocations (transaction_id, category_id, amount_cents, source, rule_id) VALUES (?, ?, ?, ?, NULLIF(?, ''))`,
+		a.TransactionID, a.CategoryID, a.AmountCents, a.Source, a.RuleID)
 	if err != nil {
 		return fmt.Errorf("store: insert allocation: %w", err)
 	}
 	return nil
 }
 
-// SetAllocationCategory moves an existing allocation to another category.
+// SetAllocationCategory moves an existing allocation to another category, as
+// stated by Finanzguru.
 func (s *Store) SetAllocationCategory(ctx context.Context, allocationID, categoryID int64) error {
 	_, err := s.q.ExecContext(ctx, `
 		UPDATE allocations
-		SET category_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+		SET category_id = ?, source = 'finanzguru', rule_id = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 		WHERE id = ?`, categoryID, allocationID)
 	if err != nil {
 		return fmt.Errorf("store: update allocation: %w", err)
@@ -335,4 +340,84 @@ func (s *Store) countChildren(ctx context.Context, id int64) (int, error) {
 		return 0, fmt.Errorf("store: count sub categories: %w", err)
 	}
 	return n, nil
+}
+
+// CategoryExample is what a category is predicted from: the fields of a
+// transaction that identify its counterparty. CategoryID is 0 for a
+// transaction that is not categorized yet.
+type CategoryExample struct {
+	TxID            int64
+	Counterparty    string
+	CounterpartyRef string
+	CreditorID      string
+	CategoryID      int64
+}
+
+// CategoryExamples returns the transactions whose category is known from
+// Finanzguru or was set by hand, oldest first. Categories applied
+// automatically are left out, so that a wrong one is not learned from.
+// Transfers are left out as well.
+func (s *Store) CategoryExamples(ctx context.Context) ([]CategoryExample, error) {
+	return s.categoryExamples(ctx, `
+		SELECT t.id, COALESCE(t.counterparty, ''), COALESCE(t.counterparty_ref, ''), COALESCE(t.creditor_id, ''), a.category_id
+		FROM transactions t
+		JOIN allocations a ON a.transaction_id = t.id AND a.source IN ('finanzguru', 'manual')
+		WHERE t.is_transfer = 0
+		ORDER BY t.booking_date, t.id`)
+}
+
+// UncategorizedExamples returns the transactions of the inbox, newest first:
+// all of them, or only those among txIDs if txIDs is not nil.
+func (s *Store) UncategorizedExamples(ctx context.Context, txIDs []int64) ([]CategoryExample, error) {
+	all, err := s.categoryExamples(ctx, `
+		SELECT id, COALESCE(counterparty, ''), COALESCE(counterparty_ref, ''), COALESCE(creditor_id, ''), 0
+		FROM uncategorized
+		ORDER BY booking_date DESC, id DESC`)
+	if err != nil || txIDs == nil {
+		return all, err
+	}
+	wanted := make(map[int64]bool, len(txIDs))
+	for _, id := range txIDs {
+		wanted[id] = true
+	}
+	examples := all[:0]
+	for _, e := range all {
+		if wanted[e.TxID] {
+			examples = append(examples, e)
+		}
+	}
+	return examples, nil
+}
+
+func (s *Store) categoryExamples(ctx context.Context, query string) ([]CategoryExample, error) {
+	rows, err := s.q.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("store: load category examples: %w", err)
+	}
+	defer rows.Close()
+
+	var examples []CategoryExample
+	for rows.Next() {
+		var e CategoryExample
+		if err := rows.Scan(&e.TxID, &e.Counterparty, &e.CounterpartyRef, &e.CreditorID, &e.CategoryID); err != nil {
+			return nil, fmt.Errorf("store: load category examples: %w", err)
+		}
+		examples = append(examples, e)
+	}
+	return examples, rows.Err()
+}
+
+// SetAutoCategory categorizes a transaction automatically, for its full
+// amount. A transaction that already has a category keeps it.
+func (s *Store) SetAutoCategory(ctx context.Context, transactionID, categoryID int64, ruleID string) error {
+	_, err := s.q.ExecContext(ctx, `
+		INSERT INTO allocations (transaction_id, category_id, amount_cents, source, rule_id)
+		SELECT t.id, ?, t.amount_cents, 'rule', ?
+		FROM transactions t
+		WHERE t.id = ? AND NOT EXISTS (SELECT 1 FROM allocations a WHERE a.transaction_id = t.id)`,
+		categoryID, ruleID, transactionID)
+	if err != nil {
+		return fmt.Errorf("store: set automatic category: %w", err)
+	}
+	return nil
 }

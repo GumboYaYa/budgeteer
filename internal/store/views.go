@@ -31,11 +31,16 @@ type TxView struct {
 	CategoryID      int64  // 0 when uncategorized
 	CategoryName    string // "Main / Sub"
 	CategorySource  string
+	// The category history points to for an uncategorized transaction. Not
+	// read from the database; the inbox fills it in.
+	SuggestedID   int64
+	SuggestedName string
 }
 
 // Status values for TxFilter.
 const (
 	StatusUncategorized = "uncategorized"
+	StatusAuto          = "auto" // categorized automatically, not confirmed by hand
 	StatusTransfer      = "transfer"
 	StatusReserve       = "reserve"
 )
@@ -112,6 +117,8 @@ func (f TxFilter) where() (string, []any) {
 	switch f.Status {
 	case StatusUncategorized:
 		add("t.id IN (SELECT id FROM uncategorized)")
+	case StatusAuto:
+		add("al.source = 'rule'")
 	case StatusTransfer:
 		add("t.is_transfer = 1")
 	case StatusReserve:

@@ -307,6 +307,43 @@ func TestOverviewPeriod(t *testing.T) {
 	}
 }
 
+// The inbox suggests the category of earlier transactions of the same
+// counterparty; the list marks categories that were applied automatically.
+func TestInboxSuggestsAndListMarksAutomatic(t *testing.T) {
+	e := newEnv(t, true)
+	if _, body := e.get("/inbox"); !strings.Contains(body, `data-suggest=""`) {
+		t.Error("a transaction without history should have no suggestion")
+	}
+
+	category := e.text(`SELECT a.category_id FROM allocations a JOIN transactions t ON t.id = a.transaction_id WHERE t.external_id = 'fg-0001'`)
+	if _, err := e.st.DB.Exec(`UPDATE transactions SET counterparty = 'BEISPIEL GMBH & Co. KG' WHERE external_id = 'fg-0007'`); err != nil {
+		t.Fatal(err)
+	}
+	_, body := e.get("/inbox")
+	if !strings.Contains(body, `data-suggest="`+category+`"`) || !strings.Contains(body, "Einnahmen / Gehalt") {
+		t.Error("inbox row should carry and show the suggested category")
+	}
+
+	// Marking for the reserve sends the inbox row back; it keeps its suggestion.
+	_, row, _ := e.post("/api/reserve", url.Values{"ids": {e.txID("fg-0007")}, "value": {"1"}, "view": {"inbox"}})
+	if !strings.Contains(row, `data-suggest="`+category+`"`) {
+		t.Error("refreshed inbox row lost its suggestion")
+	}
+
+	id, _ := strconv.ParseInt(e.txID("fg-0007"), 10, 64)
+	categoryID, _ := strconv.ParseInt(category, 10, 64)
+	if err := e.st.SetAutoCategory(context.Background(), id, categoryID, "history:name"); err != nil {
+		t.Fatal(err)
+	}
+	_, list := e.get("/transactions?status=" + store.StatusAuto)
+	if !strings.Contains(list, `id="tx-`+e.txID("fg-0007")+`"`) || strings.Count(list, `class="tx-row"`) != 1 || !strings.Contains(list, ">auto</span>") {
+		t.Error("the filter should list exactly the automatically categorized transaction, marked as such")
+	}
+	if _, all := e.get("/transactions"); strings.Count(all, ">auto</span>") != 1 {
+		t.Error("only the automatic category should be marked")
+	}
+}
+
 func TestInboxListsUncategorized(t *testing.T) {
 	e := newEnv(t, true)
 	_, body := e.get("/inbox")
