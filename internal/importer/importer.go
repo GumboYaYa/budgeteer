@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/GumboYaYa/budgeteer/internal/categorize"
 	"github.com/GumboYaYa/budgeteer/internal/slug"
 	"github.com/GumboYaYa/budgeteer/internal/store"
 )
@@ -132,6 +133,7 @@ type Summary struct {
 	AccountsCreated   []string
 	CategoriesCreated int
 	GroupsCreated     int // recurring groups created from contracts of the source
+	AutoCategorized   int // inbox transactions categorized from history
 }
 
 // Run imports one file. It is idempotent: the identical file is recognised by
@@ -393,6 +395,13 @@ func (r *run) importAll(ctx context.Context, fileName, hash string, candidates [
 			return err
 		}
 	}
+
+	// Last, so that the categories this file brings count as history.
+	auto, err := categorize.Run(ctx, r.tx, false)
+	if err != nil {
+		return err
+	}
+	r.summary.AutoCategorized = auto.Applied
 	return nil
 }
 
@@ -671,6 +680,9 @@ func (r *run) refreshCategory(ctx context.Context, txID, amountCents, categoryID
 			TransactionID: txID, CategoryID: categoryID, AmountCents: amountCents, Source: store.SourceFinanzguru,
 		})
 	case len(allocations) == 1 && allocations[0].Source == store.SourceFinanzguru && allocations[0].CategoryID != categoryID:
+		err = r.tx.SetAllocationCategory(ctx, allocations[0].ID, categoryID)
+	case len(allocations) == 1 && allocations[0].Source == store.SourceRule:
+		// The source's own category replaces one that was only predicted.
 		err = r.tx.SetAllocationCategory(ctx, allocations[0].ID, categoryID)
 	default:
 		return nil

@@ -7,10 +7,12 @@ import (
 )
 
 // txRow is one transaction line. The script in app.js works on these rows:
-// it reads data-id, data-amount (in cents), data-transfer and data-reserve
-// and moves focus between them.
+// it reads data-id, data-amount (in cents), data-transfer, data-reserve and
+// data-suggest (the id of the suggested category) and moves focus between
+// them. Without the category column, in the inbox, a row shows its
+// suggestion instead.
 templ txRow(v store.TxView, withCategory bool) {
-	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-amount={ itoa(v.AmountCents) } data-transfer?={ v.IsTransfer } data-reserve?={ v.IsReserve }>
+	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-amount={ itoa(v.AmountCents) } data-transfer?={ v.IsTransfer } data-reserve?={ v.IsReserve } data-suggest={ suggestID(v) }>
 		<td class="w-8"><input type="checkbox" class="checkbox checkbox-xs tx-check" tabindex="-1" aria-label="Select transaction"/></td>
 		<td class="whitespace-nowrap tabular-nums">{ dateDE(v.BookingDate) }</td>
 		<td class="whitespace-nowrap text-base-content/70">{ v.AccountName }</td>
@@ -34,8 +36,17 @@ templ txRow(v store.TxView, withCategory bool) {
 				}
 				if v.CategoryName != "" {
 					<span class={ templ.KV("text-base-content/50", v.IsTransfer) }>{ v.CategoryName }</span>
+					if v.CategorySource == store.SourceRule {
+						<span class="badge badge-xs badge-ghost ml-1" title="Categorized automatically from earlier transactions; choose a category to confirm or change it">auto</span>
+					}
 				} else if !v.IsTransfer && v.AmountCents != 0 {
 					<span class="badge badge-sm badge-warning badge-soft">Uncategorized</span>
+				}
+			</td>
+		} else {
+			<td class="whitespace-nowrap text-base-content/50">
+				if v.SuggestedID != 0 {
+					<span title="Suggested from earlier transactions; Enter accepts it">{ v.SuggestedName }</span>
 				}
 			</td>
 		}
@@ -76,6 +87,8 @@ templ txTable(rows []store.TxView, view string, more bool) {
 					<th>Purpose</th>
 					if view == "list" {
 						<th>Category</th>
+					} else {
+						<th>Suggestion</th>
 					}
 					<th class="text-right">Amount</th>
 				</tr>
@@ -167,7 +180,17 @@ templ shortcutTable(page string) {
 	<table class="table table-sm">
 		<tbody>
 			<tr><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">j</kbd> <kbd class="kbd kbd-sm">k</kbd></td><td>Next / previous transaction (arrow keys work too)</td></tr>
-			<tr><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">c</kbd> or <kbd class="kbd kbd-sm">Enter</kbd></td><td>Choose a category</td></tr>
+			if page == "transactions" {
+				<tr><td class="whitespace-nowrap"><kbd class="kbd kbd-sm">c</kbd> or <kbd class="kbd kbd-sm">Enter</kbd></td><td>Choose a category</td></tr>
+			} else {
+				<tr><td><kbd class="kbd kbd-sm">c</kbd></td><td>Choose a category</td></tr>
+				<tr><td><kbd class="kbd kbd-sm">Enter</kbd></td><td>
+					Accept the suggested category; choose one if there is no suggestion
+					if page != "inbox" {
+						(in the transaction list it always lets you choose)
+					}
+				</td></tr>
+			}
 			<tr><td><kbd class="kbd kbd-sm">x</kbd></td><td>Select or unselect; actions then apply to all selected</td></tr>
 			<tr><td><kbd class="kbd kbd-sm">t</kbd></td><td>
 				if page == "inbox" {
@@ -258,6 +281,7 @@ templ listPage(d listData) {
 				<select name="status" class="select select-sm">
 					<option value="">Any</option>
 					<option value={ store.StatusUncategorized } selected?={ d.Filter.Status == store.StatusUncategorized }>Uncategorized</option>
+					<option value={ store.StatusAuto } selected?={ d.Filter.Status == store.StatusAuto }>Categorized automatically</option>
 					<option value={ store.StatusTransfer } selected?={ d.Filter.Status == store.StatusTransfer }>Transfers</option>
 					<option value={ store.StatusReserve } selected?={ d.Filter.Status == store.StatusReserve }>Reserve</option>
 				</select>

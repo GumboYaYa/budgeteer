@@ -2,7 +2,7 @@
 
 A local, single-user personal finance app: import bank transactions, categorize them, and analyze spending. The data lives in one SQLite file on your machine and can always be exported.
 
-> **Status: early rewrite.** The project is being rebuilt in Go. Importing (Finanzguru and DKB), the web UI (inbox, transactions, overview, recurring groups, cost review, reserve, categories, import), CSV/Parquet export and backup work. The DKB importer has only been tested with made-up files so far. Automatic categorization is not built yet. See [the implementation plan](specs/implementation_plan.md) for progress.
+> **Status: early rewrite.** The project is being rebuilt in Go. Importing (Finanzguru and DKB), the web UI (inbox, transactions, overview, recurring groups, cost review, reserve, categories, import), CSV/Parquet export and backup work. The DKB importer has only been tested with made-up files so far. Transactions are categorized automatically from the history of their counterparty; there is no rules file. See [the implementation plan](specs/implementation_plan.md) for progress.
 
 ## What it will do
 
@@ -14,7 +14,9 @@ A local, single-user personal finance app: import bank transactions, categorize 
 - **Plan a reserve** for bills that come only once or twice a year: mark them, and Budgeteer tells you how much to move to your reserve account each month.
 - **Export** everything as CSV or Parquet, and back up the database with one command.
 
-It also imports DKB account exports, for the time after Finanzguru. Planned for later: automatic categorization through rules and suggestions.
+It also imports DKB account exports, for the time after Finanzguru.
+
+New transactions are categorized from history: when all earlier transactions of the same counterparty have one category, the new one gets it on import, marked "auto" in the transaction list. Otherwise the inbox shows the most likely category as a suggestion, and `Enter` accepts it. Only what Finanzguru states or what you set by hand counts as history.
 
 ## How it is built
 
@@ -36,6 +38,7 @@ budgeteer account set-reserve --slug <slug> | --none
 budgeteer import finanzguru <file> [--cutover YYYY-MM-DD] [--force]
 budgeteer import dkb --account <slug> <file> [--force]
 budgeteer serve [--addr localhost:8080]
+budgeteer categorize [--dry-run]
 budgeteer reserve
 budgeteer export --format csv|parquet [--out dir]
 budgeteer backup [--out dir]

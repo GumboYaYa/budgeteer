@@ -11,7 +11,7 @@ Local, single-user personal finance app in Go: import bank transactions (Finanzg
 ## Scope decisions that differ from the spec
 
 - No split transactions: exactly one allocation per transaction, for the full amount. The `allocations` table stays.
-- Automatic categorization (`rules.yaml`, suggestions, `categorize` command) is deferred. Categorization is manual in the inbox. Do not build it unless asked.
+- Automatic categorization works from history, not from a `rules.yaml` (plan decision D30): `internal/categorize` predicts a category from earlier transactions of the same counterparty, applies it when the history is unanimous and suggests it in the inbox otherwise. Do not build a rules file unless asked.
 - Finanzguru is the main data source for now and is re-imported repeatedly as a full export. The DKB importer exists for the later switch; an account's cut-over date decides which source owns which days.
 
 ## Layout
@@ -21,6 +21,7 @@ cmd/budgeteer/      kong CLI wiring only, no logic
 internal/store/     DB open, migrations, queries
 internal/money/     cents parsing and formatting
 internal/importer/  shared pipeline + one package per source
+internal/categorize/ category prediction from history, auto-apply and inbox suggestions
 internal/slug/      slugs for accounts and categories
 internal/reserve/   monthly amount for irregular expenses
 internal/export/    CSV / Parquet
@@ -39,6 +40,7 @@ CLI commands and web handlers are thin wrappers; logic lives in `internal/` so b
 - **Migrations** use goose with embedded SQL files, forward-only. Once a migration has been applied to a real database, never edit it; add a new file.
 - **Imports** are idempotent: a file is identified by its SHA-256, a row by its `dedup_key`. An import runs in one DB transaction. Parsers are pure functions without DB access.
 - **Manual work is never overwritten** by an import, not even with `--force`: allocations with `source = 'manual'`, transfer flags with `is_transfer_manual = 1`, reserve marks (`is_reserve`), recurring groups chosen by hand (`recurring_manual = 1`) and the review of a recurring group (`mandatory`, `verdict`). Change the transfer flag only through `store.SetTransfer` and a transaction's group only through `store.SetRecurringGroup` (by hand) or `store.AssignContractGroup` (imports).
+- **Automatic categories** are allocations with `source = 'rule'`, written only by `store.SetAutoCategory` and only for transactions without a category. They are never used as history for further predictions; only `finanzguru` and `manual` allocations are. Suggestions are computed when the inbox renders and are not stored.
 - **Recurring groups**: a monthly group cannot be covered by the reserve, and a mandatory group cannot have the verdict `cancel`; the setters in `internal/store/recurring.go` enforce both, so change these fields only through them. "Running expense" (active, known interval, newest transaction an outflow) is decided in one place, `runningExpense` in `internal/web/viewmodels.go`.
 - **Frontend**: templ + HTMX + DaisyUI, server-rendered. No Node toolchain. Generated `*_templ.go` and built CSS are committed; rerun `make generate` and `make css` after template changes. In `.templ` files, a text line must not start with `if`, `for` or `switch` (templ parses it as a statement). Render amounts of income or spending with the `amount` component in `pages.templ`, which shows money coming in green; balances and the positive figures of the Reserve page stay plain. HTMX swaps a section with `outerHTML`; scroll anchoring is switched off in `assets/app.css` so that does not move the page. Keyboard handling lives in `internal/web/static/app.js`; verify changes to it in a real browser, the Go tests do not cover it.
 - **Dependencies**: keep them minimal and pure Go. Use the standard library for HTTP routing.

@@ -18,6 +18,7 @@ import (
 
 	"github.com/alecthomas/kong"
 
+	"github.com/GumboYaYa/budgeteer/internal/categorize"
 	"github.com/GumboYaYa/budgeteer/internal/export"
 	"github.com/GumboYaYa/budgeteer/internal/importer"
 	"github.com/GumboYaYa/budgeteer/internal/importer/dkb"
@@ -43,9 +44,10 @@ type cli struct {
 		Finanzguru importFinanzguruCmd `cmd:"" help:"Import a Finanzguru export. Can be repeated with newer exports; only new transactions are added."`
 		DKB        importDKBCmd        `cmd:"" name:"dkb" help:"Import a DKB account export (CSV). Exports may overlap; only new transactions are added."`
 	} `cmd:"" help:"Import transactions from a file."`
-	Reserve reserveCmd `cmd:"" help:"Show the monthly amount to set aside for expenses that come once or twice a year."`
-	Export  exportCmd  `cmd:"" help:"Write all data as CSV or Parquet files."`
-	Backup  backupCmd  `cmd:"" help:"Write a consistent copy of the database."`
+	Categorize categorizeCmd `cmd:"" help:"Categorize the transactions of the inbox whose counterparty always had the same category. Imports do this on their own."`
+	Reserve    reserveCmd    `cmd:"" help:"Show the monthly amount to set aside for expenses that come once or twice a year."`
+	Export     exportCmd     `cmd:"" help:"Write all data as CSV or Parquet files."`
+	Backup     backupCmd     `cmd:"" help:"Write a consistent copy of the database."`
 }
 
 // dbPath is the database location, for commands that keep files next to it.
@@ -267,6 +269,29 @@ func (c importFinanzguruCmd) Run(ctx context.Context, st *store.Store, db dbPath
 	return nil
 }
 
+type categorizeCmd struct {
+	DryRun bool `help:"Only report what would be categorized."`
+}
+
+func (c categorizeCmd) Run(ctx context.Context, st *store.Store) error {
+	var result categorize.Result
+	err := st.InTx(ctx, func(tx *store.Store) (err error) {
+		result, err = categorize.Run(ctx, tx, c.DryRun)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if c.DryRun {
+		fmt.Printf("would be categorized:  %d\n", result.Applied)
+	} else {
+		fmt.Printf("categorized:           %d\n", result.Applied)
+	}
+	fmt.Printf("left with suggestion:  %d\n", result.Suggested)
+	fmt.Printf("left without:          %d\n", result.Left)
+	return nil
+}
+
 type exportCmd struct {
 	Format string `enum:"csv,parquet" default:"csv" help:"File format: csv or parquet."`
 	Out    string `type:"path" placeholder:"DIR" help:"Directory to write to. Default: export/ next to the database."`
@@ -317,6 +342,9 @@ func printSummary(s importer.Summary) {
 	fmt.Printf("new transactions:      %d\n", s.New)
 	fmt.Printf("already imported:      %d\n", s.Duplicates)
 	fmt.Printf("categories refreshed:  %d\n", s.Updated)
+	if s.AutoCategorized > 0 {
+		fmt.Printf("categorized by history: %d\n", s.AutoCategorized)
+	}
 	if s.FieldsUpdated > 0 {
 		fmt.Printf("details overwritten:   %d\n", s.FieldsUpdated)
 	}

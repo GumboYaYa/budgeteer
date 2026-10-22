@@ -162,6 +162,29 @@
     return act("/api/categorize", { category_id: categoryId }, "category");
   }
 
+  // Enter in the inbox: the target rows that have a suggestion get it. Rows
+  // are grouped by category, and each group can be undone on its own.
+  async function acceptSuggestions() {
+    const byCategory = new Map();
+    targets().forEach((row) => {
+      const id = row.dataset.suggest;
+      if (!id) return;
+      if (!byCategory.has(id)) byCategory.set(id, []);
+      byCategory.get(id).push(row);
+    });
+    if (byCategory.size === 0) return false;
+    for (const [categoryId, group] of byCategory) {
+      try {
+        await post("/api/categorize", group, { category_id: categoryId });
+        removeRows(group, "category");
+      } catch (err) {
+        toast(err.message);
+        break;
+      }
+    }
+    return true;
+  }
+
   function toggleTransfer() {
     const targetRows = targets();
     if (targetRows.length === 0) return;
@@ -357,8 +380,11 @@
         move(-1);
         break;
       case "c":
-      case "Enter":
         categoryPicker.open();
+        break;
+      case "Enter":
+        if (view() === "inbox" && targets().some((r) => r.dataset.suggest)) acceptSuggestions();
+        else categoryPicker.open();
         break;
       case "g":
         if (groupPicker) groupPicker.open();

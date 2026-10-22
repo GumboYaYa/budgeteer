@@ -483,6 +483,14 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func rowID(id int64) string { return "tx-" + itoa(id) }
 
+// suggestID is the id of the row's suggested category, empty if it has none.
+func suggestID(v store.TxView) string {
+	if v.SuggestedID == 0 {
+		return ""
+	}
+	return itoa(v.SuggestedID)
+}
+
 // categoryURL links a main category of the overview to its transactions.
 func categoryURL(c store.CategoryTotal, from, to string) string {
 	if c.CategoryID == 0 {
