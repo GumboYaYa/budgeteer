@@ -7,10 +7,10 @@ import (
 )
 
 // txRow is one transaction line. The script in app.js works on these rows:
-// it reads data-id, data-transfer and data-reserve and moves focus between
-// them.
+// it reads data-id, data-amount (in cents), data-transfer and data-reserve
+// and moves focus between them.
 templ txRow(v store.TxView, withCategory bool) {
-	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-transfer?={ v.IsTransfer } data-reserve?={ v.IsReserve }>
+	<tr id={ rowID(v.ID) } class="tx-row" data-id={ itoa(v.ID) } data-amount={ itoa(v.AmountCents) } data-transfer?={ v.IsTransfer } data-reserve?={ v.IsReserve }>
 		<td class="w-8"><input type="checkbox" class="checkbox checkbox-xs tx-check" tabindex="-1" aria-label="Select transaction"/></td>
 		<td class="whitespace-nowrap tabular-nums">{ dateDE(v.BookingDate) }</td>
 		<td class="whitespace-nowrap text-base-content/70">{ v.AccountName }</td>
@@ -318,12 +318,16 @@ templ listResults(d listData) {
 }
 
 // listSummary is the line with the totals and the pager, shown above and
-// below the table.
+// below the table. app.js fills in and shows the count and sum of the
+// selected rows while there is a selection.
 templ listSummary(d listData, margin string) {
 	<div class={ "flex items-center justify-between text-sm text-base-content/70", margin }>
 		<p>
 			{ plural(d.Page.Total, "transaction", "transactions") } ·
 			@amount(d.Page.SumCents)
+			<span class="tx-selection hidden ml-1">
+				· <span class="font-medium text-base-content"><span class="tx-selection-count"></span> selected · <span class="tx-selection-sum tabular-nums"></span></span>
+			</span>
 		</p>
 		if d.Pages > 1 {
 			<div class="join">

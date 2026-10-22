@@ -33,22 +33,39 @@
     focusRow(all[next]);
   }
 
+  // formatDE matches money.FormatDE: "-1.234,56 €".
+  function formatDE(cents) {
+    const abs = Math.abs(cents);
+    const whole = String(Math.floor(abs / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    return (cents < 0 ? "-" : "") + whole + "," + String(abs % 100).padStart(2, "0") + " €";
+  }
+
   // The checkbox in the table head reflects the rows: checked when all are
-  // selected, in between when only some are.
-  function syncSelectAll() {
+  // selected, in between when only some are. The list summary shows the count
+  // and sum of the selected rows while there are any.
+  function syncSelection() {
     const all = document.querySelector(".tx-check-all");
-    if (!all) return;
     const total = rows().length;
-    const count = selected().length;
-    all.checked = total > 0 && count === total;
-    all.indeterminate = count > 0 && count < total;
+    const sel = selected();
+    if (all) {
+      all.checked = total > 0 && sel.length === total;
+      all.indeterminate = sel.length > 0 && sel.length < total;
+    }
+    const sum = sel.reduce((s, r) => s + Number(r.dataset.amount || 0), 0);
+    document.querySelectorAll(".tx-selection").forEach((box) => {
+      box.classList.toggle("hidden", sel.length === 0);
+      box.querySelector(".tx-selection-count").textContent = sel.length;
+      const amount = box.querySelector(".tx-selection-sum");
+      amount.textContent = formatDE(sum);
+      amount.classList.toggle("text-success", sum > 0);
+    });
   }
 
   function setSelected(row, on) {
     row.classList.toggle("tx-selected", on);
     const box = row.querySelector(".tx-check");
     if (box) box.checked = on;
-    syncSelectAll();
+    syncSelection();
   }
 
   // The rows an action applies to: the selection, or else the focused row.
@@ -126,7 +143,7 @@
       if (keepSelection && old.classList.contains("tx-selected")) setSelected(fresh, true);
       old.replaceWith(fresh);
     });
-    syncSelectAll();
+    syncSelection();
   }
 
   async function act(url, fields, kind) {
